@@ -91,11 +91,9 @@ class TelemetryGenerator:
             self._faults.missing_sensors[sensor] = ts
 
     def clear_faults(self) -> None:
-        """Clear all active synthetic fault scenarios and reset offsets."""
+        """Clear active synthetic faults and allow offsets to recover smoothly."""
         self._faults = FaultState()
         self._frozen_values.clear()
-        self._battery_offset = 0.0
-        self._temp_offset = 0.0
 
     def get_active_faults(self) -> List[ActiveFault]:
         """Return a structured list of active fault scenarios."""
@@ -150,20 +148,30 @@ class TelemetryGenerator:
         battery_noise = float(self.rng.normal(0.0, 0.06))
         if self._faults.battery_drop is not None:
             self._battery_offset = max(self._battery_offset - 0.45, -10.5)
-        else:
-            self._battery_offset *= 0.65
+        elif self._battery_offset < 0.0:
+            # Smooth controlled recharge within nominal rate-of-change bounds
+            self._battery_offset = min(self._battery_offset + 0.28, 0.0)
         battery_val = round(self.nominal_voltage + battery_wave + battery_noise + self._battery_offset, 3)
-        battery_quality = "FAULT_SIMULATED" if self._faults.battery_drop is not None else "NOMINAL"
+        battery_quality = (
+            "FAULT_SIMULATED"
+            if (self._faults.battery_drop is not None or self._battery_offset < -0.5)
+            else "NOMINAL"
+        )
 
         # 2. Temperature (°C)
         temp_wave = 1.1 * float(np.sin(phase * 0.35 + 0.6))
         temp_noise = float(self.rng.normal(0.0, 0.15))
         if self._faults.temperature_spike is not None:
             self._temp_offset = min(self._temp_offset + 3.2, 55.0)
-        else:
-            self._temp_offset *= 0.65
+        elif self._temp_offset > 0.0:
+            # Smooth thermal cooldown within nominal rate-of-change bounds
+            self._temp_offset = max(self._temp_offset - 1.4, 0.0)
         temp_val = round(self.nominal_temperature + temp_wave + temp_noise + self._temp_offset, 2)
-        temp_quality = "FAULT_SIMULATED" if self._faults.temperature_spike is not None else "NOMINAL"
+        temp_quality = (
+            "FAULT_SIMULATED"
+            if (self._faults.temperature_spike is not None or self._temp_offset > 1.0)
+            else "NOMINAL"
+        )
 
         # 3-5. Attitude: roll, pitch, yaw (degrees)
         roll_base = 1.4 * float(np.sin(phase * 0.8)) + float(self.rng.normal(0.0, 0.18))

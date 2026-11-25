@@ -346,14 +346,22 @@ export default function Alerts({ stream }) {
                   <div className="rounded border border-slate-800 bg-[#060b16] p-2.5">
                     <div className="text-slate-500 uppercase text-[10px]">Observed</div>
                     <div className="text-slate-200 mt-0.5">
-                      {selectedAlert.observed_value ?? "MISSING"}
+                      {selectedAlert.observed_value !== null &&
+                      selectedAlert.observed_value !== undefined
+                        ? `${selectedAlert.observed_value}${
+                            selectedAlert.evidence?.unit ? ` ${selectedAlert.evidence.unit}` : ""
+                          }`
+                        : "MISSING"}
                     </div>
                   </div>
                   <div className="rounded border border-slate-800 bg-[#060b16] p-2.5">
                     <div className="text-slate-500 uppercase text-[10px]">Z-Score</div>
                     <div className="text-slate-200 mt-0.5">
                       {selectedAlert.z_score !== null && selectedAlert.z_score !== undefined
-                        ? `${selectedAlert.z_score}σ`
+                        ? `${selectedAlert.z_score > 0 ? "+" : ""}${selectedAlert.z_score}σ ${
+                            selectedAlert.evidence?.direction ||
+                            (selectedAlert.z_score >= 0 ? "ABOVE" : "BELOW")
+                          }`
                         : "—"}
                     </div>
                   </div>
@@ -363,10 +371,39 @@ export default function Alerts({ stream }) {
                   </div>
                 </div>
 
+                {selectedAlert.evidence?.baseline_mean !== undefined && (
+                  <div className="rounded border border-slate-800 bg-[#060b16] p-2.5">
+                    <div className="text-slate-500 uppercase text-[10px]">
+                      Stored Baseline Snapshot ({selectedAlert.evidence?.window_samples ?? "—"} samples)
+                    </div>
+                    <div className="text-slate-200 mt-0.5">
+                      Mean: {selectedAlert.evidence.baseline_mean}{" "}
+                      {selectedAlert.evidence?.unit || ""} // Std:{" "}
+                      {selectedAlert.evidence.baseline_std}{" "}
+                      {selectedAlert.evidence?.unit || ""}
+                    </div>
+                  </div>
+                )}
+
                 <div className="rounded border border-slate-800 bg-[#060b16] p-2.5">
                   <div className="text-slate-500 uppercase text-[10px]">Expected Baseline / Range</div>
                   <div className="text-slate-300 mt-0.5">
                     {selectedAlert.expected_range || "N/A"}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div className="rounded border border-slate-800 bg-[#060b16] p-2">
+                    <div className="text-slate-500 uppercase text-[10px]">First Detected</div>
+                    <div className="text-slate-300 mt-0.5">
+                      {new Date(selectedAlert.first_detected_at).toISOString().slice(11, 19)} UTC
+                    </div>
+                  </div>
+                  <div className="rounded border border-slate-800 bg-[#060b16] p-2">
+                    <div className="text-slate-500 uppercase text-[10px]">Last Detected</div>
+                    <div className="text-slate-300 mt-0.5">
+                      {new Date(selectedAlert.last_detected_at).toISOString().slice(11, 19)} UTC
+                    </div>
                   </div>
                 </div>
 

@@ -58,7 +58,7 @@ class AlertService:
     def upsert_findings(
         db: Session,
         candidates: List[AlertCandidate],
-        cooldown_seconds: float = 0.0,
+        cooldown_seconds: float = 10.0,
     ) -> Tuple[List[AlertRead], List[AlertRead]]:
         """Persist new alerts or update active/acknowledged duplicates in one transaction.
 
@@ -84,7 +84,6 @@ class AlertService:
             ).scalar_one_or_none()
 
             if existing is not None:
-                # Cooldown check if configured
                 last_ts = existing.last_detected_at
                 if last_ts.tzinfo is None:
                     last_ts = last_ts.replace(tzinfo=timezone.utc)
@@ -92,19 +91,35 @@ class AlertService:
                 if det_ts.tzinfo is None:
                     det_ts = det_ts.replace(tzinfo=timezone.utc)
 
-                if cooldown_seconds > 0 and (det_ts - last_ts).total_seconds() < cooldown_seconds:
+                new_rank = SEVERITY_RANK.get(cand.severity, 0)
+                old_rank = SEVERITY_RANK.get(existing.severity, 0)
+                is_escalation = new_rank > old_rank
+
+                if (
+                    not is_escalation
+                    and cooldown_seconds > 0
+                    and (det_ts - last_ts).total_seconds() < cooldown_seconds
+                ):
                     continue
 
-                if SEVERITY_RANK.get(cand.severity, 0) > SEVERITY_RANK.get(existing.severity, 0):
+                if new_rank >= old_rank:
+                    # Update full atomic snapshot so severity, title, description, observed_value,
+                    # z_score, and evidence always originate from the exact same evaluation.
                     existing.severity = cand.severity
                     existing.title = cand.title
+                    existing.description = cand.description
+                    existing.observed_value = cand.observed_value
+                    existing.expected_range = cand.expected_range
+                    existing.z_score = cand.z_score
+                    existing.reason_code = cand.reason_code
+                    existing.evidence = cand.evidence
+                else:
+                    # Preserve peak-severity atomic snapshot without mixing lower-severity values
+                    merged_evidence = dict(existing.evidence or {})
+                    merged_evidence["latest_observed_value"] = cand.observed_value
+                    merged_evidence["latest_observed_at"] = det_ts.isoformat()
+                    existing.evidence = merged_evidence
 
-                existing.description = cand.description
-                existing.observed_value = cand.observed_value
-                existing.expected_range = cand.expected_range
-                existing.z_score = cand.z_score
-                existing.reason_code = cand.reason_code
-                existing.evidence = cand.evidence
                 existing.last_detected_at = cand.detected_at
                 existing.occurrence_count += 1
                 updated_orms.append(existing)
@@ -140,6 +155,46 @@ class AlertService:
             [AlertRead.model_validate(r) for r in created_orms],
             [AlertRead.model_validate(r) for r in updated_orms],
         )
+
+    @staticmethod
+    def resolve_recovered_alerts(
+        db: Session,
+        satellite_id: str,
+        sensor_names: List[str],
+        resolved_at: datetime,
+        resolution_reason: str = "Automatic recovery verified across consecutive nominal samples.",
+    ) -> List[AlertRead]:
+        """Resolve open alerts for recovered sensors without erasing alert history."""
+        if not sensor_names:
+            return []
+
+        open_rows = (
+            db.execute(
+                select(Alert).where(
+                    Alert.satellite_id == satellite_id,
+                    Alert.sensor_name.in_(sensor_names),
+                    Alert.status.in_(("ACTIVE", "ACKNOWLEDGED")),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not open_rows:
+            return []
+
+        for row in open_rows:
+            row.status = "RESOLVED"
+            row.resolved_at = resolved_at
+            ev = dict(row.evidence or {})
+            ev["resolution_note"] = resolution_reason
+            ev["auto_resolved_at"] = resolved_at.isoformat()
+            row.evidence = ev
+
+        db.commit()
+        for row in open_rows:
+            db.refresh(row)
+
+        return [AlertRead.model_validate(r) for r in open_rows]
 
     @staticmethod
     def get_summary_counts(db: Session, satellite_id: Optional[str] = None) -> AlertSummaryCounts:

@@ -11,6 +11,8 @@ from app.schemas.alerts import IntegrityStatus, SensorChannelHealth, SensorInteg
 from app.schemas.telemetry import SENSOR_UNITS, TelemetrySampleSchema
 from app.services.telemetry_generator import SUPPORTED_SENSORS
 
+SensorKey = Tuple[str, str]  # (satellite_id, sensor_name)
+
 
 @dataclass
 class _SensorIntegrityState:
@@ -22,12 +24,15 @@ class _SensorIntegrityState:
 
 
 class SensorIntegrityService:
-    """Detects MISSING, FROZEN, INVALID, and STALE sensor conditions independently."""
+    """Detects MISSING, FROZEN, INVALID, and STALE sensor conditions independently.
+
+    Sensor integrity defects are classified as WARNING rather than CRITICAL spacecraft failures.
+    """
 
     def __init__(self, config: Optional[DetectionConfig] = None) -> None:
         self.config = config or DetectionConfig()
-        self._states: Dict[str, _SensorIntegrityState] = {
-            sensor: _SensorIntegrityState(
+        self._states: Dict[SensorKey, _SensorIntegrityState] = {
+            ("SAT-01", sensor): _SensorIntegrityState(
                 recent_values=deque(maxlen=self.config.frozen_consecutive_samples)
             )
             for sensor in SUPPORTED_SENSORS
@@ -46,10 +51,20 @@ class SensorIntegrityService:
         findings: List[SensorIntegrityFinding] = []
         valid_samples: List[TelemetrySampleSchema] = []
 
-        for sample in samples:
+        ordered_samples = sorted(
+            samples,
+            key=lambda s: (
+                s.satellite_id,
+                s.sensor_name,
+                s.timestamp if (s.timestamp is not None and s.timestamp.tzinfo is not None) else datetime.min.replace(tzinfo=timezone.utc),
+            ),
+        )
+
+        for sample in ordered_samples:
             sensor = sample.sensor_name
+            key: SensorKey = (sample.satellite_id, sensor)
             state = self._states.setdefault(
-                sensor,
+                key,
                 _SensorIntegrityState(
                     recent_values=deque(maxlen=self.config.frozen_consecutive_samples)
                 ),
@@ -67,7 +82,7 @@ class SensorIntegrityService:
                         satellite_id=sample.satellite_id,
                         sensor_name=sensor,
                         integrity_status="INVALID",
-                        severity="CRITICAL",
+                        severity="WARNING",
                         observed_value=sample.sensor_value if self._is_finite(sample.sensor_value) else None,
                         detected_at=detected_at,
                         reason_code="INVALID_TIMESTAMP",
@@ -112,7 +127,7 @@ class SensorIntegrityService:
                         satellite_id=sample.satellite_id,
                         sensor_name=sensor,
                         integrity_status="INVALID",
-                        severity="CRITICAL",
+                        severity="WARNING",
                         observed_value=None,
                         detected_at=ts,
                         reason_code="NON_FINITE_READING",
@@ -137,7 +152,7 @@ class SensorIntegrityService:
                             satellite_id=sample.satellite_id,
                             sensor_name=sensor,
                             integrity_status="INVALID",
-                            severity="CRITICAL",
+                            severity="WARNING",
                             observed_value=val,
                             detected_at=ts,
                             reason_code="OUT_OF_PHYSICAL_RANGE",
@@ -183,6 +198,7 @@ class SensorIntegrityService:
                             reason_code="REPEATED_IDENTICAL_VALUES",
                             reason=state.issue_reason,
                             evidence={
+                                "observed_value": val,
                                 "repeated_value": val,
                                 "consecutive_samples": len(state.recent_values),
                                 "unit": sample.unit,
@@ -194,7 +210,6 @@ class SensorIntegrityService:
             state.status = "OK"
             state.issue_reason = None
 
-        # Mark inactive stream cleanly if simulator is not running
         if not simulator_running:
             for state in self._states.values():
                 if state.status == "OK":
@@ -213,15 +228,15 @@ class SensorIntegrityService:
         findings: List[SensorIntegrityFinding] = []
 
         if not simulator_running:
-            for state in self._states.values():
-                if state.status in ("OK", "STALE"):
+            for (sat_id, _sensor), state in self._states.items():
+                if sat_id == satellite_id and state.status in ("OK", "STALE"):
                     state.status = "STREAM_INACTIVE"
                     state.issue_reason = "Telemetry stream is inactive (simulator stopped)."
             return findings
 
         timeout = self.config.stale_timeout_seconds
-        for sensor, state in self._states.items():
-            if state.last_received_at is None:
+        for (sat_id, sensor), state in self._states.items():
+            if sat_id != satellite_id or state.last_received_at is None:
                 continue
             elapsed = (ref_now - state.last_received_at).total_seconds()
             if elapsed > timeout:
@@ -241,9 +256,11 @@ class SensorIntegrityService:
                         reason_code="SENSOR_UPDATE_TIMEOUT",
                         reason=state.issue_reason,
                         evidence={
+                            "observed_value": state.last_value,
                             "last_received_at": state.last_received_at.isoformat(),
                             "elapsed_seconds": round(elapsed, 2),
                             "timeout_seconds": timeout,
+                            "unit": SENSOR_UNITS.get(sensor, ""),
                         },
                     )
                 )
@@ -253,12 +270,14 @@ class SensorIntegrityService:
     def get_channel_snapshots(
         self,
         simulator_running: bool,
-        baseline_stats: Optional[Dict[str, Tuple[int, Optional[float], Optional[float]]]] = None,
+        baseline_stats: Optional[Dict[SensorKey, Tuple[int, Optional[float], Optional[float]]]] = None,
+        satellite_id: str = "SAT-01",
     ) -> List[SensorChannelHealth]:
         """Return current integrity and baseline summary for all supported sensors."""
         snapshots: List[SensorChannelHealth] = []
         for sensor in SUPPORTED_SENSORS:
-            state = self._states.get(sensor, _SensorIntegrityState())
+            key: SensorKey = (satellite_id, sensor)
+            state = self._states.get(key, _SensorIntegrityState())
             status_val: IntegrityStatus = state.status
             reason = state.issue_reason
 
@@ -267,7 +286,7 @@ class SensorIntegrityService:
                 reason = "Telemetry stream inactive (simulator stopped)."
 
             count, mean_val, std_val = (
-                baseline_stats.get(sensor, (0, None, None))
+                baseline_stats.get(key, (0, None, None))
                 if baseline_stats is not None
                 else (0, None, None)
             )
@@ -285,6 +304,14 @@ class SensorIntegrityService:
                 )
             )
         return snapshots
+
+    def get_clean_channels(self, satellite_id: str = "SAT-01") -> set[str]:
+        """Return sensor names whose current integrity status is OK."""
+        return {
+            sensor
+            for (sat_id, sensor), state in self._states.items()
+            if sat_id == satellite_id and state.status == "OK"
+        }
 
     @staticmethod
     def _is_finite(value: Optional[float]) -> bool:

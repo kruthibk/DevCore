@@ -41,8 +41,9 @@ See [docs/architecture.md](docs/architecture.md) for the full system diagram, de
 
 Thresholds are centralized in [detection_config.py](backend/app/core/detection_config.py) and exposed read-only via `GET /api/v1/detection/config`:
 
-- **Rolling Baseline & Z-Score:** `rolling_window_size = 30`, `min_baseline_samples = 8`, `z_score_warning = 3.5`, `z_score_critical = 5.0` (with per-sensor `min_meaningful_std` and `min_deviation_deadband` guards).
-- **Sensor Integrity:**
+- **Rolling Baseline & Z-Score:** `rolling_window_size = 30`, `min_baseline_samples = 8`, `z_score_warning = 3.5`, `z_score_critical = 5.0` (with per-sensor `min_meaningful_std` and `min_deviation_deadband` guards, plus independent `(satellite_id, sensor_name)` baselines excluding fault/anomalous excursions).
+- **Deduplication & Recovery:** `dedup_cooldown_seconds = 10.0`, `recovery_consecutive_samples = 5` (auto-resolves open alerts after 5 consecutive clean nominal readings while preserving history).
+- **Sensor Integrity (`WARNING` severity):**
   - `MISSING`: null `sensor_value`
   - `FROZEN`: `6` consecutive identical finite readings
   - `INVALID`: `NaN`/`Inf`, missing/naive timestamp, or outside `physical_valid_range`

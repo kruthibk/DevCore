@@ -110,14 +110,33 @@ class DetectionPipelineService:
     def _persist_candidates_sync(
         self,
         candidates: List[AlertCandidate],
+        recovered_by_sat: Dict[str, List[str]],
+        resolved_at: datetime,
     ) -> Tuple[List[AlertRead], List[AlertRead], int]:
         session = self._session_factory()
         try:
-            created, updated = AlertService.upsert_findings(
-                db=session,
-                candidates=candidates,
-                cooldown_seconds=self.config.dedup_cooldown_seconds,
-            )
+            created: List[AlertRead] = []
+            updated: List[AlertRead] = []
+
+            if candidates:
+                c_list, u_list = AlertService.upsert_findings(
+                    db=session,
+                    candidates=candidates,
+                    cooldown_seconds=self.config.dedup_cooldown_seconds,
+                )
+                created.extend(c_list)
+                updated.extend(u_list)
+
+            if self.config.auto_resolve_on_recovery:
+                for sat_id, sensors in recovered_by_sat.items():
+                    resolved_list = AlertService.resolve_recovered_alerts(
+                        db=session,
+                        satellite_id=sat_id,
+                        sensor_names=sensors,
+                        resolved_at=resolved_at,
+                    )
+                    updated.extend(resolved_list)
+
             summary = AlertService.get_summary_counts(db=session)
             return created, updated, summary.active + summary.acknowledged
         except Exception:
@@ -161,17 +180,40 @@ class DetectionPipelineService:
             anomaly_findings = self.anomaly_detector.evaluate_batch(valid_samples)
 
             self.processed_sample_count += len(samples)
-            self.last_processed_at = samples[-1].timestamp
+            batch_ts = max(
+                (s.timestamp for s in samples if s.timestamp is not None),
+                default=datetime.now(timezone.utc),
+            )
+            self.last_processed_at = batch_ts
 
             candidates = self._to_alert_candidates(integrity_findings, anomaly_findings)
+
+            # Determine which channels have met recovery criteria (both integrity OK and clean streak)
+            recovered_by_sat: Dict[str, List[str]] = {}
+            if self.config.auto_resolve_on_recovery:
+                satellite_ids = {s.satellite_id for s in samples}
+                for sat_id in satellite_ids:
+                    clean_integrity = self.integrity_service.get_clean_channels(satellite_id=sat_id)
+                    clean_stats = set(
+                        self.anomaly_detector.get_recovered_channels(
+                            satellite_id=sat_id,
+                            required_clean=self.config.recovery_consecutive_samples,
+                        )
+                    )
+                    recovered = sorted(clean_integrity & clean_stats)
+                    if recovered:
+                        recovered_by_sat[sat_id] = recovered
+
             created: List[AlertRead] = []
             updated: List[AlertRead] = []
 
-            if candidates:
+            if candidates or (recovered_by_sat and self._cached_active_alert_count > 0):
                 try:
                     created, updated, open_count = await asyncio.to_thread(
                         self._persist_candidates_sync,
                         candidates,
+                        recovered_by_sat,
+                        batch_ts,
                     )
                     self._cached_active_alert_count = open_count
                     self.persisted_alerts_count += len(created) + len(updated)
@@ -218,6 +260,8 @@ class DetectionPipelineService:
                     created, updated, open_count = await asyncio.to_thread(
                         self._persist_candidates_sync,
                         candidates,
+                        {},
+                        now or datetime.now(timezone.utc),
                     )
                     self._cached_active_alert_count = open_count
                     self.persisted_alerts_count += len(created) + len(updated)
@@ -282,6 +326,8 @@ class DetectionPipelineService:
                 "z_score_critical": self.config.z_score_critical,
                 "frozen_consecutive_samples": self.config.frozen_consecutive_samples,
                 "stale_timeout_seconds": self.config.stale_timeout_seconds,
+                "dedup_cooldown_seconds": self.config.dedup_cooldown_seconds,
+                "recovery_consecutive_samples": self.config.recovery_consecutive_samples,
             },
             timestamp=datetime.now(timezone.utc),
         )
@@ -306,6 +352,8 @@ class DetectionPipelineService:
             z_score_critical=self.config.z_score_critical,
             frozen_consecutive_samples=self.config.frozen_consecutive_samples,
             stale_timeout_seconds=self.config.stale_timeout_seconds,
+            dedup_cooldown_seconds=self.config.dedup_cooldown_seconds,
+            recovery_consecutive_samples=self.config.recovery_consecutive_samples,
             sensor_limits=limits_map,
         )
 

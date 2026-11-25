@@ -135,4 +135,6 @@ class DetectionConfigResponse(BaseModel):
     z_score_critical: float
     frozen_consecutive_samples: int
     stale_timeout_seconds: float
+    dedup_cooldown_seconds: float
+    recovery_consecutive_samples: int
     sensor_limits: Dict[str, SensorLimitsSchema]

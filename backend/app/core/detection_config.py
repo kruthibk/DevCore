@@ -77,7 +77,10 @@ class DetectionConfig:
     frozen_consecutive_samples: int = 6
     frozen_tolerance: float = 1e-9
     stale_timeout_seconds: float = 6.0
-    dedup_cooldown_seconds: float = 0.0
+    dedup_cooldown_seconds: float = 10.0
+    recovery_consecutive_samples: int = 5
+    auto_resolve_on_recovery: bool = True
+    exclude_fault_labeled_from_baseline: bool = True
     sensor_limits: Dict[str, SensorLimits] = field(
         default_factory=lambda: dict(DEFAULT_SENSOR_LIMITS)
     )

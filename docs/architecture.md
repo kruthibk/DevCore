@@ -42,8 +42,9 @@ SAT-TRIAGE is a full-stack web platform for satellite telemetry anomaly triage, 
 ## Detection Algorithms & Limitations
 
 1. **Rolling Baseline & Z-Score (`STATISTICAL_ANOMALY`):**
-   - Uses a per-sensor bounded rolling window (`rolling_window_size = 30`) evaluated with `pandas.Series` mean and sample standard deviation (`ddof=1`).
+   - Uses a per-`(satellite_id, sensor_name)` bounded rolling window (`rolling_window_size = 30`) evaluated with `pandas.Series` mean and sample standard deviation (`ddof=1`) through a single authoritative `compute_z_score_stats()` helper shared across alerts, evidence, and UI explanations.
    - Requires `min_baseline_samples = 8` before evaluating z-scores, guards against zero/near-zero standard deviation (`min_meaningful_std`), and applies a per-sensor `min_deviation_deadband` to prevent false alerts on slow orbital sinusoidal cycles.
+   - **Baseline Contamination Safeguard:** Fault-injected samples (`quality_status != "NOMINAL"`) and numerically anomalous samples are excluded from updating the nominal rolling baseline window, ensuring fault bursts (such as temperature spikes or battery drops) never distort nominal recovery baselines. Explicit `reset_baseline()` is exposed for recalibration/tests and never invoked silently.
    - Records an `illustrative_two_tailed_p` via `scipy.stats.norm.sf` in `evidence` as supporting context only (not a calibrated fault probability or causal claim).
    - *Limitations:* Univariate per-channel analysis; assumes local stationarity across the trailing 30-sample window; statistical deviations indicate unusual numerical behavior, not confirmed spacecraft failure.
 
@@ -54,12 +55,14 @@ SAT-TRIAGE is a full-stack web platform for satellite telemetry anomaly triage, 
    - Evaluates incoming values against centralized `engineering_warning` and `engineering_critical` operational bounds, explicitly distinct from statistical z-score deviations.
 
 4. **Cross-Signal Sensor Integrity (`SENSOR_MISSING`, `SENSOR_FROZEN`, `SENSOR_INVALID`, `SENSOR_STALE`):**
-   - Inspects raw values and timezone-aware timestamps independently of simulator `quality_status` labels.
+   - Inspects raw values and timezone-aware timestamps independently of simulator `quality_status` labels, tracked per `(satellite_id, sensor_name)`.
+   - All sensor integrity findings carry `WARNING` severity (data-reliability advisories, not `CRITICAL` spacecraft failures).
    - `MISSING`: null readings (excluded from statistical baselines).
    - `FROZEN`: `6` consecutive identical values within `1e-9` tolerance.
    - `INVALID`: `NaN`/`Inf`, missing/naive timestamps, or values outside `physical_valid_range`.
    - `STALE`: evaluated only when `simulator_running=True` and elapsed time exceeds `6.0s`; when stopped, channels report `STREAM_INACTIVE`.
 
-5. **Alert Deduplication & Lifecycle:**
-   - Active/acknowledged duplicates keyed by `(satellite_id, sensor_name, alert_type)` update `last_detected_at`, `observed_value`, `evidence`, and increment `occurrence_count` instead of creating duplicate rows.
-   - Lifecycle transitions: `ACTIVE` → `ACKNOWLEDGED` → `RESOLVED` (human operators remain responsible for all triage decisions).
+5. **Alert Deduplication, Cooldown & Lifecycle:**
+   - Active/acknowledged duplicates keyed by `(satellite_id, sensor_name, alert_type)` respect `dedup_cooldown_seconds = 10.0` (bypassed only on severity escalation) and update `last_detected_at` + increment `occurrence_count` instead of creating duplicate rows.
+   - Lower-severity updates preserve the peak-severity atomic snapshot (`title`, `description`, `observed_value`, `z_score`, `evidence`) while recording `latest_observed_value` in `evidence`.
+   - Lifecycle transitions: `ACTIVE` → `ACKNOWLEDGED` → `RESOLVED` (explicitly by operator or automatically after `recovery_consecutive_samples = 5` consecutive clean nominal ticks, preserving full persisted history).

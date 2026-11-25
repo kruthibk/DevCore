@@ -94,10 +94,10 @@ def test_alert_persistence_deduplication_occurrence_and_lifecycle(
     assert emit_integrity.await_count == 1
     alert_id = created1[0].alert_id
 
-    # 2. Repeated missing sensor suppresses duplicate creation and increments occurrence_count
+    # 2. Repeated missing sensor after cooldown suppresses duplicate creation and increments occurrence_count
     created2, updated2, _ = asyncio.run(
         pipeline.process_batch(
-            [_sample("yaw", None, base_ts + timedelta(seconds=1))],
+            [_sample("yaw", None, base_ts + timedelta(seconds=12))],
             simulator_running=True,
         )
     )

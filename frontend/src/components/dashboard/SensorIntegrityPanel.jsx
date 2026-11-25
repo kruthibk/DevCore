@@ -95,7 +95,7 @@ export default function SensorIntegrityPanel({
               <th className="py-2.5 px-3">Sensor Channel</th>
               <th className="py-2.5 px-3">Integrity Status</th>
               <th className="py-2.5 px-3">Latest Value</th>
-              <th className="py-2.5 px-3">Rolling Baseline (n)</th>
+              <th className="py-2.5 px-3">Nominal Baseline (n)</th>
               <th className="py-2.5 px-3">Last Received</th>
               <th className="py-2.5 px-3">Notes / Finding</th>
             </tr>
@@ -126,7 +126,7 @@ export default function SensorIntegrityPanel({
                   </td>
                   <td className="py-2.5 px-3 text-slate-300">
                     {ch.baseline_mean !== null && ch.baseline_mean !== undefined
-                      ? `${ch.baseline_mean} ± ${ch.baseline_std ?? 0} (${ch.baseline_samples})`
+                      ? `${ch.baseline_mean} ± ${ch.baseline_std ?? 0} ${ch.unit} (${ch.baseline_samples})`
                       : `0 samples`}
                   </td>
                   <td className="py-2.5 px-3 text-slate-400">
@@ -190,6 +190,8 @@ export default function SensorIntegrityPanel({
               <div>Z-Score Crit: ±{detectionConfig.z_score_critical}σ</div>
               <div>Frozen Window: {detectionConfig.frozen_consecutive_samples} identical</div>
               <div>Stale Timeout: {detectionConfig.stale_timeout_seconds}s</div>
+              <div>Dedup Cooldown: {detectionConfig.dedup_cooldown_seconds}s</div>
+              <div>Recovery Window: {detectionConfig.recovery_consecutive_samples} clean</div>
             </div>
           ) : (
             <div className="text-xs text-slate-500">Loading config...</div>

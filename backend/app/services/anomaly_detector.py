@@ -4,7 +4,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 import math
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Literal, Optional, Sequence, Tuple
 
 import pandas as pd
 from scipy import stats
@@ -12,6 +12,64 @@ from scipy import stats
 from app.core.detection_config import DetectionConfig
 from app.schemas.alerts import AlertSeverity, AlertType
 from app.schemas.telemetry import TelemetrySampleSchema
+
+SensorKey = Tuple[str, str]  # (satellite_id, sensor_name)
+
+
+@dataclass(frozen=True)
+class ZScoreStats:
+    """Authoritative z-score calculation shared across detector, evidence, and UI text."""
+
+    observed_value: float
+    baseline_mean: float
+    baseline_std: float
+    z_score: float
+    direction: Literal["ABOVE", "BELOW"]
+    window_samples: int
+    two_tailed_p: float
+
+
+def compute_z_score_stats(
+    observed_value: float,
+    baseline_values: Sequence[float],
+    min_baseline_samples: int,
+    min_meaningful_std: float,
+    min_deviation_deadband: float,
+) -> Optional[ZScoreStats]:
+    """Compute baseline mean, std, and z-score atomically from one authoritative source.
+
+    Returns None when baseline size is insufficient, std is zero/near-zero, or
+    observed deviation is below the sensor noise deadband.
+    """
+    if len(baseline_values) < min_baseline_samples:
+        return None
+    if not math.isfinite(observed_value):
+        return None
+
+    series = pd.Series(list(baseline_values), dtype="float64")
+    baseline_mean = float(series.mean())
+    baseline_std = float(series.std(ddof=1))
+
+    if not math.isfinite(baseline_std) or baseline_std < min_meaningful_std:
+        return None
+
+    deviation = observed_value - baseline_mean
+    if abs(deviation) < min_deviation_deadband:
+        return None
+
+    z_score = deviation / baseline_std
+    direction: Literal["ABOVE", "BELOW"] = "ABOVE" if z_score >= 0.0 else "BELOW"
+    two_tailed_p = float(2.0 * stats.norm.sf(abs(z_score)))
+
+    return ZScoreStats(
+        observed_value=round(observed_value, 4),
+        baseline_mean=round(baseline_mean, 4),
+        baseline_std=round(baseline_std, 4),
+        z_score=round(z_score, 4),
+        direction=direction,
+        window_samples=len(baseline_values),
+        two_tailed_p=round(two_tailed_p, 8),
+    )
 
 
 @dataclass
@@ -37,29 +95,67 @@ class StatisticalAnomalyDetector:
 
     def __init__(self, config: Optional[DetectionConfig] = None) -> None:
         self.config = config or DetectionConfig()
-        self._windows: Dict[str, Deque[Tuple[datetime, float]]] = {}
+        self._windows: Dict[SensorKey, Deque[Tuple[datetime, float]]] = {}
+        self._last_samples: Dict[SensorKey, Tuple[datetime, float]] = {}
+        self._clean_streaks: Dict[SensorKey, int] = {}
 
-    def get_baseline_summary(self) -> Dict[str, Tuple[int, Optional[float], Optional[float]]]:
-        """Return (sample_count, rolling_mean, rolling_std) for each tracked sensor."""
-        summary: Dict[str, Tuple[int, Optional[float], Optional[float]]] = {}
-        for sensor, window in self._windows.items():
+    def reset_baseline(
+        self,
+        satellite_id: Optional[str] = None,
+        sensor_name: Optional[str] = None,
+    ) -> None:
+        """Explicitly clear rolling baselines for testing or operator recalibration."""
+        if satellite_id is None and sensor_name is None:
+            self._windows.clear()
+            self._last_samples.clear()
+            self._clean_streaks.clear()
+            return
+        keys_to_remove = [
+            key
+            for key in self._windows
+            if (satellite_id is None or key[0] == satellite_id)
+            and (sensor_name is None or key[1] == sensor_name)
+        ]
+        for key in keys_to_remove:
+            self._windows.pop(key, None)
+            self._last_samples.pop(key, None)
+            self._clean_streaks.pop(key, None)
+
+    def get_baseline_summary(self) -> Dict[SensorKey, Tuple[int, Optional[float], Optional[float]]]:
+        """Return (sample_count, rolling_mean, rolling_std) keyed by (satellite_id, sensor_name)."""
+        summary: Dict[SensorKey, Tuple[int, Optional[float], Optional[float]]] = {}
+        for key, window in self._windows.items():
             if not window:
-                summary[sensor] = (0, None, None)
+                summary[key] = (0, None, None)
                 continue
             series = pd.Series([val for _, val in window], dtype="float64")
             mean_val = round(float(series.mean()), 4)
             std_val = round(float(series.std(ddof=1)), 4) if len(series) >= 2 else 0.0
-            summary[sensor] = (len(window), mean_val, std_val)
+            summary[key] = (len(window), mean_val, std_val)
         return summary
+
+    def get_recovered_channels(self, satellite_id: str, required_clean: int) -> List[str]:
+        """Return sensors that have achieved >= required_clean consecutive nominal samples."""
+        return [
+            sensor
+            for (sat_id, sensor), streak in self._clean_streaks.items()
+            if sat_id == satellite_id and streak >= required_clean
+        ]
 
     def evaluate_batch(self, samples: List[TelemetrySampleSchema]) -> List[AnomalyFinding]:
         """Evaluate finite telemetry samples using independent statistical and physical checks.
 
-        Does NOT inspect sample.quality_status.
+        Detection decisions never depend on sample.quality_status.
+        Simulated fault samples and numerically anomalous samples are excluded from
+        updating the nominal rolling baseline so fault bursts do not distort recovery.
         """
         findings: List[AnomalyFinding] = []
+        ordered_samples = sorted(
+            samples,
+            key=lambda s: (s.satellite_id, s.sensor_name, s.timestamp),
+        )
 
-        for sample in samples:
+        for sample in ordered_samples:
             if sample.sensor_value is None:
                 continue
             val = float(sample.sensor_value)
@@ -67,20 +163,28 @@ class StatisticalAnomalyDetector:
                 continue
 
             sensor = sample.sensor_name
+            key: SensorKey = (sample.satellite_id, sensor)
             limits = self.config.sensor_limits.get(sensor)
             if limits is None:
                 continue
 
             window = self._windows.setdefault(
-                sensor,
+                key,
                 deque(maxlen=self.config.rolling_window_size),
             )
+            last_sample = self._last_samples.get(key)
+
+            # Enforce monotonic timestamp ordering per (satellite, sensor)
+            if last_sample is not None and sample.timestamp <= last_sample[0]:
+                continue
+
+            sample_findings: List[AnomalyFinding] = []
 
             # A. Engineering Limit Detection (distinct from statistical deviations)
             crit_min, crit_max = limits.engineering_critical
             warn_min, warn_max = limits.engineering_warning
             if val < crit_min or val > crit_max:
-                findings.append(
+                sample_findings.append(
                     AnomalyFinding(
                         satellite_id=sample.satellite_id,
                         sensor_name=sensor,
@@ -105,7 +209,7 @@ class StatisticalAnomalyDetector:
                     )
                 )
             elif val < warn_min or val > warn_max:
-                findings.append(
+                sample_findings.append(
                     AnomalyFinding(
                         satellite_id=sample.satellite_id,
                         sensor_name=sensor,
@@ -130,27 +234,27 @@ class StatisticalAnomalyDetector:
                     )
                 )
 
-            # B. Rate-of-Change Detection
-            if len(window) >= 1:
-                prev_ts, prev_val = window[-1]
+            # B. Rate-of-Change Detection (uses consecutive finite samples)
+            if last_sample is not None:
+                prev_ts, prev_val = last_sample
                 dt_seconds = (sample.timestamp - prev_ts).total_seconds()
                 if dt_seconds > 0:
                     delta = val - prev_val
                     rate_per_sec = abs(delta) / dt_seconds
                     if rate_per_sec > limits.max_rate_per_sec:
-                        severity: AlertSeverity = (
+                        roc_severity: AlertSeverity = (
                             "CRITICAL" if rate_per_sec >= 2.0 * limits.max_rate_per_sec else "WARNING"
                         )
-                        direction = "increased" if delta > 0 else "decreased"
-                        findings.append(
+                        direction_verb = "increased" if delta > 0 else "decreased"
+                        sample_findings.append(
                             AnomalyFinding(
                                 satellite_id=sample.satellite_id,
                                 sensor_name=sensor,
                                 alert_type="RATE_OF_CHANGE",
-                                severity=severity,
+                                severity=roc_severity,
                                 title=f"Rapid {sensor} rate-of-change detected",
                                 description=(
-                                    f"{self._human_name(sensor)} {direction} faster than the configured "
+                                    f"{self._human_name(sensor)} {direction_verb} faster than the configured "
                                     f"rate-of-change limit ({rate_per_sec:.3f} {limits.unit}/s vs limit "
                                     f"{limits.max_rate_per_sec} {limits.unit}/s)."
                                 ),
@@ -171,61 +275,77 @@ class StatisticalAnomalyDetector:
                             )
                         )
 
-            # C. Rolling Baseline + Z-score Detection (only with sufficient baseline & meaningful std)
-            if len(window) >= self.config.min_baseline_samples:
-                series = pd.Series([v for _, v in window], dtype="float64")
-                baseline_mean = float(series.mean())
-                baseline_std = float(series.std(ddof=1))
+            # C. Rolling Baseline + Z-score Detection (single authoritative calculation)
+            z_stats = compute_z_score_stats(
+                observed_value=val,
+                baseline_values=[v for _, v in window],
+                min_baseline_samples=self.config.min_baseline_samples,
+                min_meaningful_std=limits.min_meaningful_std,
+                min_deviation_deadband=limits.min_deviation_deadband,
+            )
+            if z_stats is not None and abs(z_stats.z_score) >= self.config.z_score_warning:
+                z_severity: AlertSeverity = (
+                    "CRITICAL"
+                    if abs(z_stats.z_score) >= self.config.z_score_critical
+                    else "WARNING"
+                )
+                sample_findings.append(
+                    AnomalyFinding(
+                        satellite_id=sample.satellite_id,
+                        sensor_name=sensor,
+                        alert_type="STATISTICAL_ANOMALY",
+                        severity=z_severity,
+                        title=f"Statistical deviation detected on {sensor}",
+                        description=(
+                            f"{self._human_name(sensor)} ({z_stats.observed_value} {limits.unit}) is "
+                            f"{abs(z_stats.z_score):.2f} standard deviations {z_stats.direction} "
+                            f"its rolling baseline ({z_stats.baseline_mean:.3f} ± "
+                            f"{z_stats.baseline_std:.3f} {limits.unit})."
+                        ),
+                        observed_value=z_stats.observed_value,
+                        expected_range=(
+                            f"{z_stats.baseline_mean:.3f} ± "
+                            f"{self.config.z_score_warning * z_stats.baseline_std:.3f} {limits.unit}"
+                        ),
+                        z_score=z_stats.z_score,
+                        reason_code="Z_SCORE_DEVIATION",
+                        evidence={
+                            "observed_value": z_stats.observed_value,
+                            "baseline_mean": z_stats.baseline_mean,
+                            "baseline_std": z_stats.baseline_std,
+                            "rolling_mean": z_stats.baseline_mean,
+                            "rolling_std": z_stats.baseline_std,
+                            "window_samples": z_stats.window_samples,
+                            "z_score": z_stats.z_score,
+                            "direction": z_stats.direction,
+                            "z_threshold_warning": self.config.z_score_warning,
+                            "z_threshold_critical": self.config.z_score_critical,
+                            "illustrative_two_tailed_p": z_stats.two_tailed_p,
+                            "unit": limits.unit,
+                        },
+                        detected_at=sample.timestamp,
+                    )
+                )
 
-                if (
-                    math.isfinite(baseline_std)
-                    and baseline_std >= limits.min_meaningful_std
-                    and abs(val - baseline_mean) >= limits.min_deviation_deadband
-                ):
-                    z_score = (val - baseline_mean) / baseline_std
-                    abs_z = abs(z_score)
-                    if abs_z >= self.config.z_score_warning:
-                        z_severity: AlertSeverity = (
-                            "CRITICAL" if abs_z >= self.config.z_score_critical else "WARNING"
-                        )
-                        direction_word = "above" if z_score > 0 else "below"
-                        two_tailed_p = float(2.0 * stats.norm.sf(abs_z))
-                        findings.append(
-                            AnomalyFinding(
-                                satellite_id=sample.satellite_id,
-                                sensor_name=sensor,
-                                alert_type="STATISTICAL_ANOMALY",
-                                severity=z_severity,
-                                title=f"Statistical deviation detected on {sensor}",
-                                description=(
-                                    f"{self._human_name(sensor)} is {abs_z:.2f} standard deviations "
-                                    f"{direction_word} its rolling baseline ({baseline_mean:.3f} ± "
-                                    f"{baseline_std:.3f} {limits.unit})."
-                                ),
-                                observed_value=val,
-                                expected_range=(
-                                    f"{baseline_mean:.3f} ± "
-                                    f"{self.config.z_score_warning * baseline_std:.3f} {limits.unit}"
-                                ),
-                                z_score=round(z_score, 4),
-                                reason_code="Z_SCORE_DEVIATION",
-                                evidence={
-                                    "observed_value": val,
-                                    "rolling_mean": round(baseline_mean, 4),
-                                    "rolling_std": round(baseline_std, 4),
-                                    "window_samples": len(window),
-                                    "z_score": round(z_score, 4),
-                                    "z_threshold_warning": self.config.z_score_warning,
-                                    "z_threshold_critical": self.config.z_score_critical,
-                                    "illustrative_two_tailed_p": round(two_tailed_p, 8),
-                                    "unit": limits.unit,
-                                },
-                                detected_at=sample.timestamp,
-                            )
-                        )
+            findings.extend(sample_findings)
+            self._last_samples[key] = (sample.timestamp, val)
 
-            # Update rolling baseline window after evaluating incoming value
-            window.append((sample.timestamp, val))
+            # Update clean recovery streak
+            if sample_findings:
+                self._clean_streaks[key] = 0
+            else:
+                self._clean_streaks[key] = self._clean_streaks.get(key, 0) + 1
+
+            # Baseline contamination safeguard:
+            # Exclude explicitly simulated fault samples AND numerically anomalous samples
+            # once the baseline has warmed up so fault bursts never distort nominal baselines.
+            is_fault_labeled = (
+                self.config.exclude_fault_labeled_from_baseline
+                and sample.quality_status != "NOMINAL"
+            )
+            is_numerical_anomaly = len(sample_findings) > 0
+            if not is_fault_labeled and not is_numerical_anomaly:
+                window.append((sample.timestamp, val))
 
         return findings
 

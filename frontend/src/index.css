@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #050811;
+    color: #e2e8f0;
+    font-family: Inter, system-ui, -apple-system, sans-serif;
+  }
+}
+
+.mission-grid {
+  background-image:
+    linear-gradient(to right, rgba(30, 45, 77, 0.22) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(30, 45, 77, 0.22) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0a101f;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e2d4d;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}

@@ -7,12 +7,16 @@ from typing import Callable, Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.detection_config import DetectionConfig
+from app.core.fault_graph_config import DEFAULT_CORRELATION_WINDOW_SECONDS
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.realtime.socket_manager import (
     emit_alert_new,
     emit_alert_updated,
+    emit_correlation_new,
+    emit_correlation_updated,
     emit_detection_status,
+    emit_fault_graph_update,
     emit_integrity_issue,
     register_detection_status_provider,
 )
@@ -24,9 +28,11 @@ from app.schemas.alerts import (
     SensorIntegrityFinding,
     SensorLimitsSchema,
 )
+from app.schemas.fault_graph import CorrelationRead, FaultGraphResponse
 from app.schemas.telemetry import TelemetrySampleSchema
 from app.services.alert_service import AlertCandidate, AlertService
 from app.services.anomaly_detector import AnomalyFinding, StatisticalAnomalyDetector
+from app.services.correlation_engine import CorrelationService
 from app.services.sensor_integrity_service import SensorIntegrityService
 
 logger = get_logger(__name__)
@@ -112,7 +118,14 @@ class DetectionPipelineService:
         candidates: List[AlertCandidate],
         recovered_by_sat: Dict[str, List[str]],
         resolved_at: datetime,
-    ) -> Tuple[List[AlertRead], List[AlertRead], int]:
+    ) -> Tuple[
+        List[AlertRead],
+        List[AlertRead],
+        int,
+        List[CorrelationRead],
+        List[CorrelationRead],
+        Optional[FaultGraphResponse],
+    ]:
         session = self._session_factory()
         try:
             created: List[AlertRead] = []
@@ -137,8 +150,37 @@ class DetectionPipelineService:
                     )
                     updated.extend(resolved_list)
 
+            corr_created: List[CorrelationRead] = []
+            corr_updated: List[CorrelationRead] = []
+            graph_snapshot: Optional[FaultGraphResponse] = None
+
+            if created or updated:
+                sat_ids = sorted({a.satellite_id for a in created + updated})
+                for sat_id in sat_ids:
+                    c_corr, u_corr = CorrelationService.correlate_and_persist(
+                        db=session,
+                        satellite_id=sat_id,
+                        window_seconds=DEFAULT_CORRELATION_WINDOW_SECONDS,
+                        reference_time=resolved_at,
+                    )
+                    corr_created.extend(c_corr)
+                    corr_updated.extend(u_corr)
+                if sat_ids:
+                    graph_snapshot = CorrelationService.build_fault_graph(
+                        db=session,
+                        satellite_id=sat_ids[0],
+                        window_seconds=DEFAULT_CORRELATION_WINDOW_SECONDS,
+                    )
+
             summary = AlertService.get_summary_counts(db=session)
-            return created, updated, summary.active + summary.acknowledged
+            return (
+                created,
+                updated,
+                summary.active + summary.acknowledged,
+                corr_created,
+                corr_updated,
+                graph_snapshot,
+            )
         except Exception:
             session.rollback()
             raise
@@ -206,10 +248,20 @@ class DetectionPipelineService:
 
             created: List[AlertRead] = []
             updated: List[AlertRead] = []
+            corr_created: List[CorrelationRead] = []
+            corr_updated: List[CorrelationRead] = []
+            graph_snapshot: Optional[FaultGraphResponse] = None
 
             if candidates or (recovered_by_sat and self._cached_active_alert_count > 0):
                 try:
-                    created, updated, open_count = await asyncio.to_thread(
+                    (
+                        created,
+                        updated,
+                        open_count,
+                        corr_created,
+                        corr_updated,
+                        graph_snapshot,
+                    ) = await asyncio.to_thread(
                         self._persist_candidates_sync,
                         candidates,
                         recovered_by_sat,
@@ -227,6 +279,9 @@ class DetectionPipelineService:
                     )
                     created = []
                     updated = []
+                    corr_created = []
+                    corr_updated = []
+                    graph_snapshot = None
 
             status_snapshot = self.build_status()
 
@@ -238,6 +293,15 @@ class DetectionPipelineService:
 
         for alert in updated:
             await emit_alert_updated(alert.model_dump(mode="json"))
+
+        for corr in corr_created:
+            await emit_correlation_new(corr.model_dump(mode="json"))
+
+        for corr in corr_updated:
+            await emit_correlation_updated(corr.model_dump(mode="json"))
+
+        if graph_snapshot is not None:
+            await emit_fault_graph_update(graph_snapshot.model_dump(mode="json"))
 
         await emit_detection_status(status_snapshot.model_dump(mode="json"))
         return created, updated, integrity_findings
@@ -257,7 +321,7 @@ class DetectionPipelineService:
             if findings:
                 candidates = self._to_alert_candidates(findings, [])
                 try:
-                    created, updated, open_count = await asyncio.to_thread(
+                    created, updated, open_count, corr_created, corr_updated, graph_snapshot = await asyncio.to_thread(
                         self._persist_candidates_sync,
                         candidates,
                         {},
@@ -269,9 +333,9 @@ class DetectionPipelineService:
                 except Exception as exc:
                     self.failed_persist_count += 1
                     self.last_persistence_error = str(exc)
-                    created, updated = [], []
+                    created, updated, corr_created, corr_updated, graph_snapshot = [], [], [], [], None
             else:
-                created, updated = [], []
+                created, updated, corr_created, corr_updated, graph_snapshot = [], [], [], [], None
             status_snapshot = self.build_status()
 
         for finding in findings:
@@ -280,6 +344,12 @@ class DetectionPipelineService:
             await emit_alert_new(alert.model_dump(mode="json"))
         for alert in updated:
             await emit_alert_updated(alert.model_dump(mode="json"))
+        for corr in corr_created:
+            await emit_correlation_new(corr.model_dump(mode="json"))
+        for corr in corr_updated:
+            await emit_correlation_updated(corr.model_dump(mode="json"))
+        if graph_snapshot is not None:
+            await emit_fault_graph_update(graph_snapshot.model_dump(mode="json"))
         await emit_detection_status(status_snapshot.model_dump(mode="json"))
         return findings
 

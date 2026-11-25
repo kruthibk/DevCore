@@ -2,10 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import {
   acknowledgeAlert,
+  acknowledgeCorrelation,
   clearSimulatorFaults,
+  dismissCorrelation,
   fetchAlerts,
+  fetchCorrelations,
   fetchDetectionConfig,
   fetchDetectionStatus,
+  fetchFaultGraph,
   fetchLatestTelemetry,
   fetchSimulatorStatus,
   getApiBaseUrl,
@@ -59,9 +63,24 @@ export function useTelemetryStream() {
   const [detectionConfig, setDetectionConfig] = useState(null);
   const [integrityIssues, setIntegrityIssues] = useState([]);
 
+  // Phase 5: Fault Graph & Correlation state
+  const [faultGraph, setFaultGraph] = useState(null);
+  const [correlations, setCorrelations] = useState([]);
+  const [correlationSummary, setCorrelationSummary] = useState(null);
+  const [faultGraphLoading, setFaultGraphLoading] = useState(true);
+  const [faultGraphError, setFaultGraphError] = useState(null);
+  const [graphWindowSeconds, setGraphWindowSeconds] = useState(120);
+  const [correlationStatusFilter, setCorrelationStatusFilter] = useState("");
+  const [pendingCorrelationAction, setPendingCorrelationAction] = useState(null);
+  const [correlationActionError, setCorrelationActionError] = useState(null);
+
   const socketRef = useRef(null);
   const filtersRef = useRef(alertFilters);
   filtersRef.current = alertFilters;
+  const graphWindowRef = useRef(graphWindowSeconds);
+  graphWindowRef.current = graphWindowSeconds;
+  const corrStatusRef = useRef(correlationStatusFilter);
+  corrStatusRef.current = correlationStatusFilter;
 
   const refreshAlerts = useCallback(async (overrideFilters = null) => {
     const activeFilters = overrideFilters || filtersRef.current;
@@ -83,6 +102,40 @@ export function useTelemetryStream() {
     setAlertsLoading(false);
     return res;
   }, []);
+
+  const refreshFaultGraph = useCallback(
+    async (overrideWindow = null, overrideCorrStatus = null) => {
+      const winSec = overrideWindow ?? graphWindowRef.current;
+      const statusVal =
+        overrideCorrStatus !== null ? overrideCorrStatus : corrStatusRef.current;
+
+      const [graphRes, corrRes] = await Promise.all([
+        fetchFaultGraph({ satelliteId: "SAT-01", windowSeconds: winSec }),
+        fetchCorrelations({
+          satelliteId: "SAT-01",
+          status: statusVal || null,
+          limit: 50,
+          offset: 0,
+        }),
+      ]);
+
+      if (graphRes.ok && graphRes.data) {
+        setFaultGraph(graphRes.data);
+        setFaultGraphError(null);
+      } else {
+        setFaultGraphError(graphRes.error || "Unable to fetch fault graph.");
+      }
+
+      if (corrRes.ok && corrRes.data) {
+        setCorrelations(corrRes.data.items || []);
+        setCorrelationSummary(corrRes.data.summary || null);
+      }
+
+      setFaultGraphLoading(false);
+      return graphRes;
+    },
+    []
+  );
 
   const syncInitialState = useCallback(async () => {
     const [statusRes, latestRes, detStatusRes, detConfigRes] = await Promise.all([
@@ -115,8 +168,8 @@ export function useTelemetryStream() {
       }
     }
 
-    await refreshAlerts();
-  }, [refreshAlerts]);
+    await Promise.all([refreshAlerts(), refreshFaultGraph()]);
+  }, [refreshAlerts, refreshFaultGraph]);
 
   useEffect(() => {
     syncInitialState();
@@ -135,6 +188,7 @@ export function useTelemetryStream() {
       setSocketStatus("connected");
       setSocketError(null);
       refreshAlerts();
+      refreshFaultGraph();
     });
 
     socket.on("disconnect", (reason) => {
@@ -214,11 +268,25 @@ export function useTelemetryStream() {
       refreshAlerts();
     });
 
+    socket.on("fault_graph:update", (payload) => {
+      if (payload) {
+        setFaultGraph(payload);
+      }
+    });
+
+    socket.on("correlation:new", () => {
+      refreshFaultGraph();
+    });
+
+    socket.on("correlation:updated", () => {
+      refreshFaultGraph();
+    });
+
     return () => {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [syncInitialState, refreshAlerts]);
+  }, [syncInitialState, refreshAlerts, refreshFaultGraph]);
 
   const updateAlertFilters = useCallback(
     (nextFilters) => {
@@ -290,6 +358,62 @@ export function useTelemetryStream() {
     [refreshAlerts]
   );
 
+  const handleAcknowledgeCorrelation = useCallback(
+    async (correlationId) => {
+      setPendingCorrelationAction(`ack:${correlationId}`);
+      setCorrelationActionError(null);
+      try {
+        const res = await acknowledgeCorrelation(correlationId);
+        if (!res.ok) {
+          setCorrelationActionError(res.error || "Failed to acknowledge correlation.");
+          return res;
+        }
+        await refreshFaultGraph();
+        return res;
+      } finally {
+        setPendingCorrelationAction(null);
+      }
+    },
+    [refreshFaultGraph]
+  );
+
+  const handleDismissCorrelation = useCallback(
+    async (correlationId) => {
+      setPendingCorrelationAction(`dismiss:${correlationId}`);
+      setCorrelationActionError(null);
+      try {
+        const res = await dismissCorrelation(correlationId);
+        if (!res.ok) {
+          setCorrelationActionError(res.error || "Failed to dismiss correlation.");
+          return res;
+        }
+        await refreshFaultGraph();
+        return res;
+      } finally {
+        setPendingCorrelationAction(null);
+      }
+    },
+    [refreshFaultGraph]
+  );
+
+  const updateGraphWindow = useCallback(
+    (winSec) => {
+      setGraphWindowSeconds(winSec);
+      setFaultGraphLoading(true);
+      refreshFaultGraph(winSec, null);
+    },
+    [refreshFaultGraph]
+  );
+
+  const updateCorrelationStatusFilter = useCallback(
+    (statusVal) => {
+      setCorrelationStatusFilter(statusVal);
+      setFaultGraphLoading(true);
+      refreshFaultGraph(null, statusVal);
+    },
+    [refreshFaultGraph]
+  );
+
   return {
     socketStatus,
     socketError,
@@ -327,5 +451,21 @@ export function useTelemetryStream() {
     detectionStatus,
     detectionConfig,
     integrityIssues,
+    // Phase 5 exports
+    faultGraph,
+    correlations,
+    correlationSummary,
+    faultGraphLoading,
+    faultGraphError,
+    graphWindowSeconds,
+    updateGraphWindow,
+    correlationStatusFilter,
+    updateCorrelationStatusFilter,
+    refreshFaultGraph,
+    pendingCorrelationAction,
+    correlationActionError,
+    clearCorrelationActionError: () => setCorrelationActionError(null),
+    acknowledgeCorrelation: handleAcknowledgeCorrelation,
+    dismissCorrelation: handleDismissCorrelation,
   };
 }

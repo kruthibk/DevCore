@@ -18,7 +18,8 @@ Satellite ground operations teams monitor thousands of telemetry channels across
 - **Phase 1:** Versioned FastAPI backend, PostgreSQL via Docker Compose, structured JSON logging, centralized error handling, `User` ORM model with `bcrypt` hashing, and health diagnostics.
 - **Phase 2:** Ground-station Mission Control UI (`Overview`, `Telemetry`, `Alerts`, `Incidents`, `System Diagnostics`) with responsive layout and explicit empty states.
 - **Phase 3:** Backend NumPy synthetic telemetry generator (`SAT-01`), controllable fault-injection scenarios, `python-socketio` real-time streaming to Recharts dashboards, and bounded batch PostgreSQL persistence (`telemetry_readings`). All generated readings are explicitly marked as **SYNTHETIC SIMULATION DATA**.
-- **Phase 4 (Current):** Statistical anomaly detection (rolling baseline + z-score, rate-of-change, engineering limits using NumPy, Pandas, SciPy), independent cross-signal sensor integrity verification (`MISSING`, `FROZEN`, `INVALID`, `STALE`), deduplicated persistent alerts in PostgreSQL (`alerts`), and live Socket.IO alert/integrity streaming.
+- **Phase 4:** Statistical anomaly detection (rolling baseline + z-score, rate-of-change, engineering limits using NumPy, Pandas, SciPy), independent cross-signal sensor integrity verification (`MISSING`, `FROZEN`, `INVALID`, `STALE`), deduplicated persistent alerts in PostgreSQL (`alerts`), and live Socket.IO alert/integrity streaming.
+- **Phase 5 (Current):** Configurable satellite subsystem dependency graph (`EPS`, `THERMAL`, `ADCS`, `OBC`, `SENSORS`), time-window alert correlation (`120s` default window), rule-based hybrid causal hypothesis engine with supporting/contradicting evidence and illustrative heuristic confidence, persistent `correlations` storage, and interactive `/fault-graph` operator view.
 
 ---
 
@@ -62,6 +63,12 @@ Thresholds are centralized in [detection_config.py](backend/app/core/detection_c
 - Continuing findings matching an `ACTIVE` or `ACKNOWLEDGED` `(satellite_id, sensor_name, alert_type)` update the existing row and increment `occurrence_count`.
 - Operator transitions: `ACTIVE` → `ACKNOWLEDGED` (`POST /api/v1/alerts/{alert_id}/acknowledge`) → `RESOLVED` (`POST /api/v1/alerts/{alert_id}/resolve`).
 
+### Hybrid Causal Fault Graph & Alert Correlation (Phase 5)
+- Subsystem dependency topology configured in [fault_graph_config.py](backend/app/core/fault_graph_config.py) covering `EPS`, `THERMAL`, `ADCS`, `OBC`, and `SENSORS`, sensor-to-subsystem mappings, failure modes, and directed subsystem couplings (`PROVIDES_POWER`, `THERMAL_COUPLING`, `ATTITUDE_SOLAR_COUPLING`, `ATTITUDE_THERMAL_COUPLING`, `TELEMETRY_BUS`, `CONTROL_LOOP`).
+- Deterministic rule-based correlation (`DEFAULT_CORRELATION_WINDOW_SECONDS = 120.0`, no LLM inference) groups temporally proximate Phase 4 alerts under explicit rules (`EPS_THERMAL_COUPLED_FAULT`, `ADCS_EPS_SOLAR_COUPLING`, `OBC_MULTI_CHANNEL_INTEGRITY`, `EPS_UNDERVOLTAGE_CLUSTER`, `THERMAL_EXCURSION_CLUSTER`, `ADCS_ATTITUDE_CLUSTER`).
+- Persisted in PostgreSQL `correlations` table (`id`, `correlation_id`, `satellite_id`, `rule_code`, `suspected_subsystem`, `hypothesis`, `grouping_reason`, `related_alert_ids` JSON, `supporting_evidence` JSON, `contradicting_evidence` JSON, `confidence_score`, `confidence_explanation`, `status`, `window_start`, `window_end`, `acknowledged_at`, `dismissed_at`, `created_at`, `updated_at`).
+- All hypotheses explicitly frame **possible common causes** with supporting/contradicting evidence and an illustrative heuristic confidence score — correlation never proves causation, and operators retain final authority (`ACTIVE` → `ACKNOWLEDGED` or `DISMISSED`).
+
 ---
 
 ## REST API Endpoints
@@ -84,6 +91,11 @@ Thresholds are centralized in [detection_config.py](backend/app/core/detection_c
 | `POST` | `/api/v1/alerts/{alert_id}/resolve` | Transitions an alert to `RESOLVED`. |
 | `GET` | `/api/v1/detection/status` | Returns detection engine status, processed sample count, open alert count, and 5-channel integrity snapshots. |
 | `GET` | `/api/v1/detection/config` | Returns read-only statistical thresholds and sensor limits. |
+| `GET` | `/api/v1/fault-graph` | Returns subsystem dependency nodes, sensors, persisted alert nodes, edges, and correlations. |
+| `GET` | `/api/v1/fault-graph/correlations` | Lists persisted correlation hypotheses with status, subsystem, window, and pagination filters. |
+| `GET` | `/api/v1/fault-graph/correlations/{correlation_id}` | Returns full correlation details, linked alerts, supporting/contradicting evidence, and confidence explanation. |
+| `POST` | `/api/v1/fault-graph/correlations/{correlation_id}/acknowledge` | Transitions a correlation hypothesis to `ACKNOWLEDGED` and emits Socket.IO updates. |
+| `POST` | `/api/v1/fault-graph/correlations/{correlation_id}/dismiss` | Transitions a correlation hypothesis to `DISMISSED` and emits Socket.IO updates. |
 
 ---
 
@@ -96,6 +108,9 @@ Thresholds are centralized in [detection_config.py](backend/app/core/detection_c
 - `alert:updated`: Updated/deduplicated, acknowledged, or resolved alert (`AlertRead` JSON).
 - `detection:status`: Updated engine status and 5-channel `sensor_states` integrity snapshot.
 - `integrity:issue`: Real-time sensor integrity finding (`MISSING`, `FROZEN`, `INVALID`, `STALE`).
+- `fault_graph:update`: Live subsystem fault graph topology and correlation snapshot (`FaultGraphResponse` JSON).
+- `correlation:new`: Newly persisted correlation hypothesis (`CorrelationRead` JSON).
+- `correlation:updated`: Updated, acknowledged, or dismissed correlation hypothesis (`CorrelationRead` JSON).
 
 ---
 
@@ -106,6 +121,7 @@ Thresholds are centralized in [detection_config.py](backend/app/core/detection_c
 3. Inject **Battery Drop** or **Temp Spike** to observe `STATISTICAL_ANOMALY`, `RATE_OF_CHANGE`, and `ENGINEERING_LIMIT` alerts appear in **Overview** and **Alerts**.
 4. Select a target sensor and inject **Frozen Sensor** (~6s) or **Missing Data** to observe integrity findings in **System Diagnostics** and **Alerts**.
 5. Click **Acknowledge** / **Resolve** on alerts and refresh the page to confirm PostgreSQL persistence.
+6. Inject **Battery Drop** and **Temp Spike** together, open **Fault Graph** (`/fault-graph`), inspect correlated subsystems (`EPS`, `THERMAL`), review supporting/contradicting evidence and illustrative confidence, switch time windows (`60s` / `120s` / `300s`), and verify **Acknowledge** / **Dismiss** persistence across page reload.
 
 ---
 

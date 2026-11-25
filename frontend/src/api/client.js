@@ -164,3 +164,50 @@ export function fetchDetectionStatus() {
 export function fetchDetectionConfig() {
   return requestEndpoint("/api/v1/detection/config");
 }
+
+export function fetchFaultGraph({ satelliteId = "SAT-01", windowSeconds = 120 } = {}) {
+  const params = new URLSearchParams({
+    satellite_id: satelliteId,
+    window_seconds: String(windowSeconds),
+  });
+  return requestEndpoint(`/api/v1/fault-graph?${params.toString()}`);
+}
+
+export function fetchCorrelations({
+  satelliteId = null,
+  status = null,
+  suspectedSubsystem = null,
+  windowSeconds = null,
+  limit = 50,
+  offset = 0,
+} = {}) {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (satelliteId) params.set("satellite_id", satelliteId);
+  if (status) params.set("status", status);
+  if (suspectedSubsystem) params.set("suspected_subsystem", suspectedSubsystem);
+  if (windowSeconds) params.set("window_seconds", String(windowSeconds));
+  return requestEndpoint(`/api/v1/fault-graph/correlations?${params.toString()}`);
+}
+
+export function fetchCorrelationDetail(correlationId) {
+  return requestEndpoint(
+    `/api/v1/fault-graph/correlations/${encodeURIComponent(correlationId)}`
+  );
+}
+
+export function acknowledgeCorrelation(correlationId) {
+  return requestEndpoint(
+    `/api/v1/fault-graph/correlations/${encodeURIComponent(correlationId)}/acknowledge`,
+    { method: "POST" }
+  );
+}
+
+export function dismissCorrelation(correlationId) {
+  return requestEndpoint(
+    `/api/v1/fault-graph/correlations/${encodeURIComponent(correlationId)}/dismiss`,
+    { method: "POST" }
+  );
+}

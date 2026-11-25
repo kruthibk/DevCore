@@ -1,4 +1,4 @@
-# SAT-TRIAGE Architecture (Phases 1–4)
+# SAT-TRIAGE Architecture (Phases 1–5)
 
 ## Overview
 
@@ -7,13 +7,15 @@ SAT-TRIAGE is a full-stack web platform for satellite telemetry anomaly triage, 
 - **Phase 1:** Project foundation, FastAPI service, PostgreSQL via Docker Compose, `User` ORM model, health probes.
 - **Phase 2:** Ground-station Mission Control UI shell with Overview, Telemetry, Alerts, Incidents, and System Diagnostics pages.
 - **Phase 3:** Backend-driven NumPy synthetic telemetry simulator (`SAT-01`), fault-injection scenarios, Socket.IO real-time streaming, and bounded batch PostgreSQL persistence.
-- **Phase 4 (Current):** Statistical anomaly detection (NumPy, Pandas, SciPy), cross-signal sensor integrity verification, deduplicated persistent alerts, and live Socket.IO alert streaming.
+- **Phase 4:** Statistical anomaly detection (NumPy, Pandas, SciPy), cross-signal sensor integrity verification, deduplicated persistent alerts, and live Socket.IO alert streaming.
+- **Phase 5 (Current):** Configurable satellite subsystem dependency graph (`EPS`, `THERMAL`, `ADCS`, `OBC`, `SENSORS`), time-window alert correlation, deterministic rule-based hybrid causal hypothesis engine, persistent `correlations` storage, live graph/correlation Socket.IO events, and interactive `/fault-graph` Mission Control view.
 
 ## Component Flow
 
 ```text
 +-------------------------------------------------------+
 |          React + Vite Mission Control UI              |
+|  - Interactive Fault Graph + Hypothesis Inspector     |
 |  - Live Alerts Queue + Evidence & Ack/Resolve         |
 |  - Sensor Integrity Panel (System Diagnostics)        |
 |  - Live Recharts Telemetry + Simulator Controls       |
@@ -27,7 +29,8 @@ SAT-TRIAGE is a full-stack web platform for satellite telemetry anomaly triage, 
 |      1. SensorIntegrityService (MISSING/FROZEN/...)   |
 |      2. StatisticalAnomalyDetector (Pandas/SciPy)     |
 |      3. AlertService (Deduplicate & Persist)          |
-|      4. Socket.IO Broadcast (alert:*, detection:*)    |
+|      4. CorrelationService (Time-Window Causal Rules) |
+|      5. Socket.IO Broadcast (alert:*, fault_graph:*)  |
 +---------------------------+---------------------------+
                             | Scoped Sessions (asyncio.to_thread)
                             v
@@ -36,6 +39,7 @@ SAT-TRIAGE is a full-stack web platform for satellite telemetry anomaly triage, 
 |  - users                                              |
 |  - telemetry_readings                                 |
 |  - alerts (dedup index + JSON evidence)               |
+|  - correlations (hypotheses, evidence, lifecycle)     |
 +-------------------------------------------------------+
 ```
 
@@ -66,3 +70,17 @@ SAT-TRIAGE is a full-stack web platform for satellite telemetry anomaly triage, 
    - Active/acknowledged duplicates keyed by `(satellite_id, sensor_name, alert_type)` respect `dedup_cooldown_seconds = 10.0` (bypassed only on severity escalation) and update `last_detected_at` + increment `occurrence_count` instead of creating duplicate rows.
    - Lower-severity updates preserve the peak-severity atomic snapshot (`title`, `description`, `observed_value`, `z_score`, `evidence`) while recording `latest_observed_value` in `evidence`.
    - Lifecycle transitions: `ACTIVE` → `ACKNOWLEDGED` → `RESOLVED` (explicitly by operator or automatically after `recovery_consecutive_samples = 5` consecutive clean nominal ticks, preserving full persisted history).
+
+## Hybrid Causal Fault Graph & Alert Correlation (Phase 5)
+
+1. **Configurable Subsystem Dependency Graph (`fault_graph_config.py`):**
+   - Defines five spacecraft subsystems (`EPS`, `THERMAL`, `ADCS`, `OBC`, `SENSORS`), their failure modes, sensor mappings (`battery_voltage` → `EPS`, `temperature` → `THERMAL`, `roll`/`pitch`/`yaw` → `ADCS`, with `SENSORS` instrumenting all five channels), and directed coupling relationships (`PROVIDES_POWER`, `THERMAL_COUPLING`, `ATTITUDE_SOLAR_COUPLING`, `ATTITUDE_THERMAL_COUPLING`, `TELEMETRY_BUS`, `CONTROL_LOOP`).
+2. **Time-Window Alert Correlation & Rule Engine (`correlation_engine.py`):**
+   - Groups open Phase 4 persisted alerts within a configurable sliding time window (`DEFAULT_CORRELATION_WINDOW_SECONDS = 120.0`) by temporal proximity, sensor channels, alert categories (physical anomaly vs. sensor integrity), severity, and explicit domain causal rules (`EPS_THERMAL_COUPLED_FAULT`, `ADCS_EPS_SOLAR_COUPLING`, `OBC_MULTI_CHANNEL_INTEGRITY`, `EPS_UNDERVOLTAGE_CLUSTER`, `THERMAL_EXCURSION_CLUSTER`, `ADCS_ATTITUDE_CLUSTER`, plus single-sensor integrity advisories).
+   - Uses deterministic rule-based correlation only — never delegates causal reasoning to an LLM.
+3. **Supporting/Contradicting Evidence, Illustrative Confidence & Limitations:**
+   - Records both **supporting evidence** (matched alert types, temporal proximity, severity, multi-detector agreement) and **contradicting/alternative evidence** (such as coupled attitude channels remaining nominal, or sensor integrity flags reducing confidence in physical failure interpretations).
+   - Computes an **illustrative heuristic `confidence_score`** accompanied by a plain-language explanation. Hypotheses explicitly represent **possible common causes**, never confirmed failures; correlation never proves causation, and human operators retain final authority.
+4. **Correlation Persistence & Lifecycle (`correlations` table):**
+   - Persists each active group (`correlation_id`, `satellite_id`, `rule_code`, `suspected_subsystem`, `hypothesis`, `grouping_reason`, `related_alert_ids`, `supporting_evidence`, `contradicting_evidence`, `confidence_score`, `confidence_explanation`, `status`, `window_start`, `window_end`, timestamps).
+   - Operator actions (`ACTIVE` → `ACKNOWLEDGED` or `DISMISSED`) persist in PostgreSQL and broadcast updates over Socket.IO (`correlation:new`, `correlation:updated`, `fault_graph:update`).

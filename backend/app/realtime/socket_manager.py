@@ -108,3 +108,18 @@ async def emit_detection_status(payload: Dict[str, Any]) -> None:
 async def emit_integrity_issue(payload: Dict[str, Any]) -> None:
     """Broadcast detected cross-signal sensor integrity defects."""
     await _safe_emit("integrity:issue", payload)
+
+
+async def emit_fault_graph_update(payload: Dict[str, Any]) -> None:
+    """Broadcast updated causal fault graph topology and correlations."""
+    await _safe_emit("fault_graph:update", payload)
+
+
+async def emit_correlation_new(payload: Dict[str, Any]) -> None:
+    """Broadcast newly persisted alert correlation hypotheses."""
+    await _safe_emit("correlation:new", payload)
+
+
+async def emit_correlation_updated(payload: Dict[str, Any]) -> None:
+    """Broadcast updated/acknowledged/dismissed alert correlations."""
+    await _safe_emit("correlation:updated", payload)

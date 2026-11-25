@@ -4,6 +4,7 @@ import { useSystemHealth } from "./hooks/useSystemHealth";
 import { useTelemetryStream } from "./hooks/useTelemetryStream";
 import Alerts from "./pages/Alerts";
 import Diagnostics from "./pages/Diagnostics";
+import FaultGraph from "./pages/FaultGraph";
 import Incidents from "./pages/Incidents";
 import Overview from "./pages/Overview";
 import Telemetry from "./pages/Telemetry";
@@ -20,6 +21,10 @@ const PAGE_META = {
   "/alerts": {
     title: "Alerts Queue",
     subtitle: "Persisted Statistical Anomaly & Sensor Integrity Findings",
+  },
+  "/fault-graph": {
+    title: "Hybrid Causal Fault Graph",
+    subtitle: "Subsystem Dependencies, Alert Correlation & Root-Cause Hypotheses",
   },
   "/incidents": {
     title: "Incident Management",
@@ -43,6 +48,7 @@ export default function App() {
         <Route path="/" element={<Overview health={health} stream={stream} />} />
         <Route path="/telemetry" element={<Telemetry health={health} stream={stream} />} />
         <Route path="/alerts" element={<Alerts stream={stream} />} />
+        <Route path="/fault-graph" element={<FaultGraph stream={stream} />} />
         <Route path="/incidents" element={<Incidents />} />
         <Route path="/diagnostics" element={<Diagnostics health={health} stream={stream} />} />
         <Route path="*" element={<Navigate to="/" replace />} />

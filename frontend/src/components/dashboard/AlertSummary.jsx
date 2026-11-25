@@ -1,11 +1,18 @@
 import { AlertTriangle, BellOff } from "lucide-react";
 import { Link } from "react-router-dom";
 import EmptyState from "../common/EmptyState";
+import StatusBadge from "../common/StatusBadge";
 
-export default function AlertSummary({ counts = null, alerts = [] }) {
-  const critical = counts?.critical ?? "—";
-  const warning = counts?.warning ?? "—";
-  const info = counts?.info ?? "—";
+function severityVariant(severity) {
+  if (severity === "CRITICAL") return "critical";
+  if (severity === "WARNING") return "warning";
+  return "info";
+}
+
+export default function AlertSummary({ summary = null, alerts = [], error = null }) {
+  const critical = summary ? summary.critical_active : "—";
+  const warning = summary ? summary.warning_active : "—";
+  const info = summary ? summary.info_active : "—";
 
   return (
     <section className="rounded-lg border border-slate-800 bg-[#090f1e] p-5 flex flex-col justify-between">
@@ -39,17 +46,48 @@ export default function AlertSummary({ counts = null, alerts = [] }) {
         </div>
 
         <div className="text-xs font-mono uppercase tracking-wider text-slate-500 mb-2">
-          Recent Alerts
+          Recent Persisted Alerts
         </div>
-        {alerts.length === 0 ? (
+
+        {error ? (
+          <div className="rounded border border-rose-500/30 bg-rose-500/10 p-3 text-xs font-mono text-rose-200">
+            Unable to load alerts: {error}
+          </div>
+        ) : alerts.length === 0 ? (
           <EmptyState
             icon={BellOff}
             title="No alert data available yet."
-            description="Anomaly detection endpoints are not enabled in Phase 2. Live alerts will appear once Phase 4 detection is active."
-            phaseBadge="Pending Phase 4"
+            description="Persisted statistical anomaly and sensor integrity alerts will appear here when detected."
+            phaseBadge="Detection Active"
             compact
           />
-        ) : null}
+        ) : (
+          <div className="space-y-2">
+            {alerts.slice(0, 4).map((alert) => (
+              <Link
+                key={alert.alert_id}
+                to="/alerts"
+                className="block rounded border border-slate-800 bg-[#060b16] hover:border-slate-700 p-3 transition-colors"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <StatusBadge
+                      variant={severityVariant(alert.severity)}
+                      label={alert.severity}
+                    />
+                    <span className="text-xs font-semibold text-slate-200 truncate">
+                      {alert.title}
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono text-slate-500">
+                    {alert.status} // ×{alert.occurrence_count}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-1 line-clamp-1">{alert.description}</p>
+              </Link>
+            ))}
+          </div>
+        )}
       </div>
     </section>
   );

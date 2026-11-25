@@ -119,3 +119,48 @@ export function fetchTelemetryHistory({
   }
   return requestEndpoint(`/api/v1/telemetry/history?${params.toString()}`);
 }
+
+export function fetchAlerts({
+  satelliteId = null,
+  sensorName = null,
+  severity = null,
+  alertType = null,
+  status = null,
+  limit = 50,
+  offset = 0,
+} = {}) {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (satelliteId) params.set("satellite_id", satelliteId);
+  if (sensorName) params.set("sensor_name", sensorName);
+  if (severity) params.set("severity", severity);
+  if (alertType) params.set("alert_type", alertType);
+  if (status) params.set("status", status);
+  return requestEndpoint(`/api/v1/alerts?${params.toString()}`);
+}
+
+export function fetchAlertDetail(alertId) {
+  return requestEndpoint(`/api/v1/alerts/${encodeURIComponent(alertId)}`);
+}
+
+export function acknowledgeAlert(alertId) {
+  return requestEndpoint(`/api/v1/alerts/${encodeURIComponent(alertId)}/acknowledge`, {
+    method: "POST",
+  });
+}
+
+export function resolveAlert(alertId) {
+  return requestEndpoint(`/api/v1/alerts/${encodeURIComponent(alertId)}/resolve`, {
+    method: "POST",
+  });
+}
+
+export function fetchDetectionStatus() {
+  return requestEndpoint("/api/v1/detection/status");
+}
+
+export function fetchDetectionConfig() {
+  return requestEndpoint("/api/v1/detection/config");
+}

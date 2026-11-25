@@ -3,8 +3,9 @@ import LatencyChart from "../components/LatencyChart";
 import ErrorState from "../components/common/ErrorState";
 import LoadingState from "../components/common/LoadingState";
 import DiagnosticsPanel from "../components/dashboard/DiagnosticsPanel";
+import SensorIntegrityPanel from "../components/dashboard/SensorIntegrityPanel";
 
-export default function Diagnostics({ health }) {
+export default function Diagnostics({ health, stream }) {
   const {
     isInitialLoading,
     backendState,
@@ -62,6 +63,13 @@ export default function Diagnostics({ health }) {
       </div>
 
       <DiagnosticsPanel health={health} />
+
+      <SensorIntegrityPanel
+        detectionStatus={stream?.detectionStatus}
+        detectionConfig={stream?.detectionConfig}
+        integrityIssues={stream?.integrityIssues}
+      />
+
       <LatencyChart history={probeHistory} />
       <DiagnosticsView
         serviceHealth={serviceHealth}

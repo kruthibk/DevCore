@@ -191,7 +191,7 @@ export default function Sidebar({
           <Cpu className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
           {(!collapsed || isMobile) && (
             <span className="truncate">
-              {team?.name || "DevCore"} // {team?.event || "AVISHKAR'26"}
+              {team?.name || "DevCore"} 
             </span>
           )}
         </div>

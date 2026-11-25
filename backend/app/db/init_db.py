@@ -4,7 +4,7 @@ from sqlalchemy.engine import Engine
 
 from app.core.logging import get_logger
 from app.db.base import Base
-from app.models import telemetry, user  # noqa: F401 - ensures ORM models register on Base.metadata
+from app.models import alert, telemetry, user  # noqa: F401 - ensures ORM models register on Base.metadata
 
 logger = get_logger(__name__)
 

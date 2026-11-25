@@ -1,4 +1,4 @@
-# SAT-TRIAGE Architecture (Phases 1–3)
+# SAT-TRIAGE Architecture (Phases 1–4)
 
 ## Overview
 
@@ -6,39 +6,60 @@ SAT-TRIAGE is a full-stack web platform for satellite telemetry anomaly triage, 
 
 - **Phase 1:** Project foundation, FastAPI service, PostgreSQL via Docker Compose, `User` ORM model, health probes.
 - **Phase 2:** Ground-station Mission Control UI shell with Overview, Telemetry, Alerts, Incidents, and System Diagnostics pages.
-- **Phase 3 (Current):** Backend-driven NumPy synthetic telemetry simulator (`SAT-01`), fault-injection scenarios, Socket.IO real-time streaming, and bounded batch PostgreSQL persistence.
+- **Phase 3:** Backend-driven NumPy synthetic telemetry simulator (`SAT-01`), fault-injection scenarios, Socket.IO real-time streaming, and bounded batch PostgreSQL persistence.
+- **Phase 4 (Current):** Statistical anomaly detection (NumPy, Pandas, SciPy), cross-signal sensor integrity verification, deduplicated persistent alerts, and live Socket.IO alert streaming.
 
 ## Component Flow
 
 ```text
 +-------------------------------------------------------+
 |          React + Vite Mission Control UI              |
-|  - Socket.IO client (/socket.io) -> 60-pt live buffer |
-|  - Recharts live telemetry & diagnostics charts       |
-|  - Simulator & Fault Injection Controls               |
+|  - Live Alerts Queue + Evidence & Ack/Resolve         |
+|  - Sensor Integrity Panel (System Diagnostics)        |
+|  - Live Recharts Telemetry + Simulator Controls       |
 +---------------------------+---------------------------+
-                            | HTTP REST + WebSocket / Polling
+                            | HTTP REST + Socket.IO (/socket.io)
                             v
 +-------------------------------------------------------+
 |      FastAPI + python-socketio (ASGI Sub-App)         |
-|  - GET /health, /health/db, /api/v1/info              |
-|  - POST /api/v1/simulator/{start,stop,faults,...}     |
-|  - GET /api/v1/telemetry/{latest,history}             |
-|  - TelemetrySimulatorService (asyncio loop + lock)    |
-|  - TelemetryGenerator (NumPy)                         |
+|  - Simulator Loop -> TelemetryGenerator (NumPy)       |
+|  - DetectionPipelineService (asyncio.Lock):           |
+|      1. SensorIntegrityService (MISSING/FROZEN/...)   |
+|      2. StatisticalAnomalyDetector (Pandas/SciPy)     |
+|      3. AlertService (Deduplicate & Persist)          |
+|      4. Socket.IO Broadcast (alert:*, detection:*)    |
 +---------------------------+---------------------------+
-                            | Controlled Batch Flush (asyncio.to_thread)
+                            | Scoped Sessions (asyncio.to_thread)
                             v
 +-------------------------------------------------------+
 |              PostgreSQL 16 (Docker)                   |
 |  - users                                              |
-|  - telemetry_readings (indexed on ts & sat/sensor/ts) |
+|  - telemetry_readings                                 |
+|  - alerts (dedup index + JSON evidence)               |
 +-------------------------------------------------------+
 ```
 
-## Telemetry Pipeline & Resilience
+## Detection Algorithms & Limitations
 
-1. **Generation:** `TelemetryGenerator` uses NumPy (`numpy.random.default_rng`) to synthesize `battery_voltage`, `temperature`, `roll`, `pitch`, and `yaw` readings tagged with `SYNTHETIC SIMULATION DATA` and timezone-aware UTC timestamps.
-2. **Real-Time Streaming:** `TelemetrySimulatorService` emits `telemetry:update` over `python-socketio` on every sampling tick without blocking the ASGI event loop.
-3. **Bounded Batch Persistence:** Generated samples accumulate in a bounded `deque(maxlen=500)` and flush to PostgreSQL in controlled batches (`SIMULATOR_PERSIST_BATCH_SIZE`, default `10`) via `asyncio.to_thread`. Database outages are logged and tracked via `failed_persist_batches` / `last_persistence_error` without crashing the simulator or falsely incrementing `persisted_count`.
-4. **Graceful Health Probes:** `GET /health` remains `200 OK` during database outages, while `GET /health/db` returns `503 Service Unavailable` with structured error metadata.
+1. **Rolling Baseline & Z-Score (`STATISTICAL_ANOMALY`):**
+   - Uses a per-sensor bounded rolling window (`rolling_window_size = 30`) evaluated with `pandas.Series` mean and sample standard deviation (`ddof=1`).
+   - Requires `min_baseline_samples = 8` before evaluating z-scores, guards against zero/near-zero standard deviation (`min_meaningful_std`), and applies a per-sensor `min_deviation_deadband` to prevent false alerts on slow orbital sinusoidal cycles.
+   - Records an `illustrative_two_tailed_p` via `scipy.stats.norm.sf` in `evidence` as supporting context only (not a calibrated fault probability or causal claim).
+   - *Limitations:* Univariate per-channel analysis; assumes local stationarity across the trailing 30-sample window; statistical deviations indicate unusual numerical behavior, not confirmed spacecraft failure.
+
+2. **Rate-of-Change (`RATE_OF_CHANGE`):**
+   - Computes `|Δvalue / Δt|` across consecutive valid samples and flags excursions above sensor-specific `max_rate_per_sec` limits.
+
+3. **Engineering Limits (`ENGINEERING_LIMIT`):**
+   - Evaluates incoming values against centralized `engineering_warning` and `engineering_critical` operational bounds, explicitly distinct from statistical z-score deviations.
+
+4. **Cross-Signal Sensor Integrity (`SENSOR_MISSING`, `SENSOR_FROZEN`, `SENSOR_INVALID`, `SENSOR_STALE`):**
+   - Inspects raw values and timezone-aware timestamps independently of simulator `quality_status` labels.
+   - `MISSING`: null readings (excluded from statistical baselines).
+   - `FROZEN`: `6` consecutive identical values within `1e-9` tolerance.
+   - `INVALID`: `NaN`/`Inf`, missing/naive timestamps, or values outside `physical_valid_range`.
+   - `STALE`: evaluated only when `simulator_running=True` and elapsed time exceeds `6.0s`; when stopped, channels report `STREAM_INACTIVE`.
+
+5. **Alert Deduplication & Lifecycle:**
+   - Active/acknowledged duplicates keyed by `(satellite_id, sensor_name, alert_type)` update `last_detected_at`, `observed_value`, `evidence`, and increment `occurrence_count` instead of creating duplicate rows.
+   - Lifecycle transitions: `ACTIVE` → `ACKNOWLEDGED` → `RESOLVED` (human operators remain responsible for all triage decisions).

@@ -1,16 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import {
+  acknowledgeAlert,
   clearSimulatorFaults,
+  fetchAlerts,
+  fetchDetectionConfig,
+  fetchDetectionStatus,
   fetchLatestTelemetry,
   fetchSimulatorStatus,
   getApiBaseUrl,
   injectSimulatorFault,
+  resolveAlert,
   startSimulator,
   stopSimulator,
 } from "../api/client";
 
 const MAX_CHART_POINTS = 60;
+const MAX_INTEGRITY_EVENTS = 25;
 
 function toChartPoint(timestampIso, readingsMap) {
   const timeLabel = timestampIso ? timestampIso.slice(11, 19) : new Date().toISOString().slice(11, 19);
@@ -34,16 +40,66 @@ export function useTelemetryStream() {
   const [lastDataUpdate, setLastDataUpdate] = useState(null);
   const [pendingAction, setPendingAction] = useState(null);
   const [actionError, setActionError] = useState(null);
+
+  // Phase 4: Alerts & Sensor Integrity state
+  const [alerts, setAlerts] = useState([]);
+  const [alertSummary, setAlertSummary] = useState(null);
+  const [alertsTotal, setAlertsTotal] = useState(0);
+  const [alertsLoading, setAlertsLoading] = useState(true);
+  const [alertsError, setAlertsError] = useState(null);
+  const [alertFilters, setAlertFilters] = useState({
+    severity: "",
+    alertType: "",
+    status: "",
+  });
+  const [pendingAlertAction, setPendingAlertAction] = useState(null);
+  const [alertActionError, setAlertActionError] = useState(null);
+
+  const [detectionStatus, setDetectionStatus] = useState(null);
+  const [detectionConfig, setDetectionConfig] = useState(null);
+  const [integrityIssues, setIntegrityIssues] = useState([]);
+
   const socketRef = useRef(null);
+  const filtersRef = useRef(alertFilters);
+  filtersRef.current = alertFilters;
+
+  const refreshAlerts = useCallback(async (overrideFilters = null) => {
+    const activeFilters = overrideFilters || filtersRef.current;
+    const res = await fetchAlerts({
+      severity: activeFilters.severity || null,
+      alertType: activeFilters.alertType || null,
+      status: activeFilters.status || null,
+      limit: 50,
+      offset: 0,
+    });
+    if (res.ok && res.data) {
+      setAlerts(res.data.items || []);
+      setAlertsTotal(res.data.total ?? 0);
+      setAlertSummary(res.data.summary || null);
+      setAlertsError(null);
+    } else {
+      setAlertsError(res.error || "Unable to fetch alerts from backend.");
+    }
+    setAlertsLoading(false);
+    return res;
+  }, []);
 
   const syncInitialState = useCallback(async () => {
-    const [statusRes, latestRes] = await Promise.all([
+    const [statusRes, latestRes, detStatusRes, detConfigRes] = await Promise.all([
       fetchSimulatorStatus(),
       fetchLatestTelemetry("SAT-01"),
+      fetchDetectionStatus(),
+      fetchDetectionConfig(),
     ]);
 
     if (statusRes.ok && statusRes.data) {
       setSimulatorStatus(statusRes.data);
+    }
+    if (detStatusRes.ok && detStatusRes.data) {
+      setDetectionStatus(detStatusRes.data);
+    }
+    if (detConfigRes.ok && detConfigRes.data) {
+      setDetectionConfig(detConfigRes.data);
     }
     if (latestRes.ok && latestRes.data?.readings) {
       const readings = latestRes.data.readings;
@@ -58,7 +114,9 @@ export function useTelemetryStream() {
         }
       }
     }
-  }, []);
+
+    await refreshAlerts();
+  }, [refreshAlerts]);
 
   useEffect(() => {
     syncInitialState();
@@ -76,6 +134,7 @@ export function useTelemetryStream() {
     socket.on("connect", () => {
       setSocketStatus("connected");
       setSocketError(null);
+      refreshAlerts();
     });
 
     socket.on("disconnect", (reason) => {
@@ -136,11 +195,39 @@ export function useTelemetryStream() {
       ]);
     });
 
+    socket.on("detection:status", (payload) => {
+      if (payload) {
+        setDetectionStatus(payload);
+      }
+    });
+
+    socket.on("integrity:issue", (finding) => {
+      if (!finding) return;
+      setIntegrityIssues((prev) => [finding, ...prev.slice(0, MAX_INTEGRITY_EVENTS - 1)]);
+    });
+
+    socket.on("alert:new", () => {
+      refreshAlerts();
+    });
+
+    socket.on("alert:updated", () => {
+      refreshAlerts();
+    });
+
     return () => {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [syncInitialState]);
+  }, [syncInitialState, refreshAlerts]);
+
+  const updateAlertFilters = useCallback(
+    (nextFilters) => {
+      setAlertFilters(nextFilters);
+      setAlertsLoading(true);
+      refreshAlerts(nextFilters);
+    },
+    [refreshAlerts]
+  );
 
   const runControlAction = useCallback(async (actionKey, fn) => {
     setPendingAction(actionKey);
@@ -165,6 +252,44 @@ export function useTelemetryStream() {
     }
   }, []);
 
+  const handleAcknowledgeAlert = useCallback(
+    async (alertId) => {
+      setPendingAlertAction(`ack:${alertId}`);
+      setAlertActionError(null);
+      try {
+        const res = await acknowledgeAlert(alertId);
+        if (!res.ok) {
+          setAlertActionError(res.error || "Failed to acknowledge alert.");
+          return res;
+        }
+        await refreshAlerts();
+        return res;
+      } finally {
+        setPendingAlertAction(null);
+      }
+    },
+    [refreshAlerts]
+  );
+
+  const handleResolveAlert = useCallback(
+    async (alertId) => {
+      setPendingAlertAction(`resolve:${alertId}`);
+      setAlertActionError(null);
+      try {
+        const res = await resolveAlert(alertId);
+        if (!res.ok) {
+          setAlertActionError(res.error || "Failed to resolve alert.");
+          return res;
+        }
+        await refreshAlerts();
+        return res;
+      } finally {
+        setPendingAlertAction(null);
+      }
+    },
+    [refreshAlerts]
+  );
+
   return {
     socketStatus,
     socketError,
@@ -185,5 +310,22 @@ export function useTelemetryStream() {
     clearFaults: () =>
       runControlAction("clear_faults", () => clearSimulatorFaults()),
     refreshStatus: syncInitialState,
+    // Phase 4 exports
+    alerts,
+    alertSummary,
+    alertsTotal,
+    alertsLoading,
+    alertsError,
+    alertFilters,
+    updateAlertFilters,
+    refreshAlerts,
+    pendingAlertAction,
+    alertActionError,
+    clearAlertActionError: () => setAlertActionError(null),
+    acknowledgeAlert: handleAcknowledgeAlert,
+    resolveAlert: handleResolveAlert,
+    detectionStatus,
+    detectionConfig,
+    integrityIssues,
   };
 }

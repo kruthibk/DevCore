@@ -32,7 +32,16 @@ export default function Overview({ health, stream }) {
     refresh,
   } = health;
 
-  const { latestReadings, chartHistory, lastDataUpdate, simulatorStatus, socketStatus } = stream;
+  const {
+    latestReadings,
+    chartHistory,
+    lastDataUpdate,
+    simulatorStatus,
+    socketStatus,
+    alerts,
+    alertSummary,
+    alertsError,
+  } = stream;
 
   const battery = latestReadings.battery_voltage;
   const temp = latestReadings.temperature;
@@ -236,9 +245,9 @@ export default function Overview({ health, stream }) {
         </div>
       </section>
 
-      {/* D. Alert Summary & E. Incident Overview (Empty states preserved for Phase 4+) */}
+      {/* D. Alert Summary & E. Incident Overview */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <AlertSummary />
+        <AlertSummary summary={alertSummary} alerts={alerts} error={alertsError} />
         <IncidentSummary />
       </div>
 

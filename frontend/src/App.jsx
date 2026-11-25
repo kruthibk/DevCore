@@ -19,7 +19,7 @@ const PAGE_META = {
   },
   "/alerts": {
     title: "Alerts Queue",
-    subtitle: "Anomaly Detection & Threshold Violations (Phase 4)",
+    subtitle: "Persisted Statistical Anomaly & Sensor Integrity Findings",
   },
   "/incidents": {
     title: "Incident Management",
@@ -42,9 +42,9 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Overview health={health} stream={stream} />} />
         <Route path="/telemetry" element={<Telemetry health={health} stream={stream} />} />
-        <Route path="/alerts" element={<Alerts />} />
+        <Route path="/alerts" element={<Alerts stream={stream} />} />
         <Route path="/incidents" element={<Incidents />} />
-        <Route path="/diagnostics" element={<Diagnostics health={health} />} />
+        <Route path="/diagnostics" element={<Diagnostics health={health} stream={stream} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </MainLayout>

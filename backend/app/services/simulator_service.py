@@ -15,6 +15,7 @@ from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.models.telemetry import TelemetryReading
 from app.realtime.socket_manager import (
+    emit_detection_status,
     emit_simulation_fault,
     emit_simulation_status,
     emit_telemetry_update,
@@ -29,6 +30,7 @@ from app.schemas.telemetry import (
     TelemetryLatestResponse,
     TelemetrySampleSchema,
 )
+from app.services.detection_pipeline import DetectionPipelineService, detection_pipeline
 from app.services.telemetry_generator import SUPPORTED_SENSORS, TelemetryGenerator
 
 logger = get_logger(__name__)
@@ -52,9 +54,11 @@ class TelemetrySimulatorService:
         self,
         session_factory: sessionmaker = SessionLocal,
         seed: Optional[int] = None,
+        detection_service: Optional[DetectionPipelineService] = None,
     ) -> None:
         settings = get_settings()
         self._session_factory: Callable[[], Session] = session_factory
+        self._detection_service = detection_service
         self._satellite_id = settings.simulator_satellite_id
         self._interval_seconds = settings.simulator_interval_seconds
         self._persist_batch_size = settings.simulator_persist_batch_size
@@ -124,6 +128,9 @@ class TelemetrySimulatorService:
             },
         )
         await emit_simulation_status(snapshot.model_dump(mode="json"))
+        if self._detection_service is not None:
+            self._detection_service.simulator_running = True
+            await emit_detection_status(self._detection_service.build_status().model_dump(mode="json"))
         return snapshot
 
     async def stop(self) -> SimulatorStatusResponse:
@@ -146,6 +153,8 @@ class TelemetrySimulatorService:
 
         logger.info("Telemetry simulator stopped", extra={"satellite_id": self._satellite_id})
         await emit_simulation_status(snapshot.model_dump(mode="json"))
+        if self._detection_service is not None:
+            await self._detection_service.on_simulator_stopped()
         return snapshot
 
     async def stop_if_running(self) -> None:
@@ -230,6 +239,9 @@ class TelemetrySimulatorService:
 
         if len(self._pending_batch) >= self._persist_batch_size:
             await self.flush_pending_batch()
+
+        if self._detection_service is not None:
+            await self._detection_service.process_batch(samples, simulator_running=self.is_running)
 
         return samples
 
@@ -361,7 +373,7 @@ class TelemetrySimulatorService:
         return [TelemetrySampleSchema.model_validate(r) for r in rows], total
 
 
-simulator_service = TelemetrySimulatorService()
+simulator_service = TelemetrySimulatorService(detection_service=detection_pipeline)
 
 
 async def _provide_socket_status() -> dict:

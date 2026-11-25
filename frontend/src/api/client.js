@@ -1,14 +1,18 @@
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/$/, "");
 
-async function requestEndpoint(path) {
+async function requestEndpoint(path, options = {}) {
   const started = performance.now();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8000);
 
   try {
     const response = await fetch(`${API_BASE_URL}${path}`, {
-      method: "GET",
-      headers: { Accept: "application/json" },
+      method: options.method || "GET",
+      headers: {
+        Accept: "application/json",
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
       signal: controller.signal,
     });
     const latencyMs = Math.round((performance.now() - started) * 100) / 100;
@@ -20,14 +24,16 @@ async function requestEndpoint(path) {
       payload = null;
     }
 
+    const errorMessage = response.ok
+      ? null
+      : payload?.error?.message || payload?.error || payload?.detail || `HTTP ${response.status}`;
+
     return {
       ok: response.ok,
       statusCode: response.status,
       latencyMs,
       data: payload,
-      error: response.ok
-        ? null
-        : payload?.error || payload?.detail || `HTTP ${response.status}`,
+      error: errorMessage,
       checkedAt: new Date().toISOString(),
     };
   } catch (err) {
@@ -62,4 +68,54 @@ export function fetchDatabaseHealth() {
 
 export function fetchSystemInfo() {
   return requestEndpoint("/api/v1/info");
+}
+
+export function fetchSimulatorStatus() {
+  return requestEndpoint("/api/v1/simulator/status");
+}
+
+export function startSimulator(intervalSeconds) {
+  return requestEndpoint("/api/v1/simulator/start", {
+    method: "POST",
+    body: intervalSeconds ? { interval_seconds: intervalSeconds } : undefined,
+  });
+}
+
+export function stopSimulator() {
+  return requestEndpoint("/api/v1/simulator/stop", { method: "POST" });
+}
+
+export function injectSimulatorFault(faultType, targetSensor = null) {
+  const body = targetSensor
+    ? { fault_type: faultType, target_sensor: targetSensor }
+    : { fault_type: faultType };
+  return requestEndpoint("/api/v1/simulator/faults", {
+    method: "POST",
+    body,
+  });
+}
+
+export function clearSimulatorFaults() {
+  return requestEndpoint("/api/v1/simulator/faults/clear", { method: "POST" });
+}
+
+export function fetchLatestTelemetry(satelliteId = "SAT-01") {
+  return requestEndpoint(`/api/v1/telemetry/latest?satellite_id=${encodeURIComponent(satelliteId)}`);
+}
+
+export function fetchTelemetryHistory({
+  satelliteId = "SAT-01",
+  sensorName = null,
+  limit = 100,
+  offset = 0,
+} = {}) {
+  const params = new URLSearchParams({
+    satellite_id: satelliteId,
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (sensorName) {
+    params.set("sensor_name", sensorName);
+  }
+  return requestEndpoint(`/api/v1/telemetry/history?${params.toString()}`);
 }

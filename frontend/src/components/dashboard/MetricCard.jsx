@@ -13,12 +13,12 @@ export default function MetricCard({
   return (
     <div className="rounded-lg border border-slate-800 bg-[#090f1e] p-4 flex flex-col justify-between">
       <div>
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-mono uppercase tracking-wider text-slate-400 flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs font-mono uppercase tracking-wider text-slate-400 flex items-center gap-2 min-w-0">
             {Icon && <Icon className="w-3.5 h-3.5 text-cyan-400 shrink-0" />}
-            <span>{title}</span>
+            <span className="truncate">{title}</span>
           </span>
-          <StatusBadge variant={statusVariant} label={statusLabel} />
+          <StatusBadge variant={statusVariant} label={statusLabel} className="shrink-0" />
         </div>
 
         {children ? (

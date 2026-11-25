@@ -17,7 +17,7 @@ export default function TelemetryChart({
   data = [],
   series = [],
   emptyTitle = "Waiting for telemetry",
-  emptyDescription = "Phase 3 telemetry simulator will populate live and historical channel data.",
+  emptyDescription = "Start the synthetic telemetry simulator to stream live readings into this chart.",
 }) {
   return (
     <div className="rounded-lg border border-slate-800 bg-[#090f1e] p-4 flex flex-col">
@@ -39,7 +39,7 @@ export default function TelemetryChart({
             <EmptyState
               title={emptyTitle}
               description={emptyDescription}
-              phaseBadge="Phase 3 Telemetry Stream"
+              phaseBadge="SYNTHETIC SIMULATION STREAM"
               compact
             />
           </div>
@@ -55,7 +55,7 @@ export default function TelemetryChart({
               <YAxis
                 stroke="#64748b"
                 tick={{ fontSize: 11, fontFamily: "monospace" }}
-                unit={unit ? ` ${unit}` : ""}
+                domain={["auto", "auto"]}
               />
               <Tooltip
                 contentStyle={{
@@ -76,6 +76,7 @@ export default function TelemetryChart({
                   stroke={s.color}
                   strokeWidth={2}
                   dot={false}
+                  connectNulls={false}
                   isAnimationActive={false}
                 />
               ))}

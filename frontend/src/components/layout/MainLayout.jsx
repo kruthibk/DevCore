@@ -6,6 +6,7 @@ export default function MainLayout({
   title,
   subtitle,
   health,
+  stream,
   children,
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -28,6 +29,8 @@ export default function MainLayout({
           systemState={health.systemState}
           backendState={health.backendState}
           dbState={health.dbState}
+          socketStatus={stream.socketStatus}
+          simulatorRunning={Boolean(stream.simulatorStatus?.running)}
           isPolling={health.isPolling}
           onManualRefresh={health.refresh}
           onOpenMobileMenu={() => setMobileOpen(true)}

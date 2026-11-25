@@ -15,8 +15,10 @@ from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.db.init_db import init_db
 from app.db.session import engine, get_db
+from app.realtime.socket_manager import socket_asgi_app
 from app.schemas.health import DatabaseHealthResponse, HealthResponse
 from app.services.health_service import check_database_health, get_service_health
+from app.services.simulator_service import simulator_service
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -36,6 +38,7 @@ async def lifespan(_: FastAPI):
     )
     init_db(engine)
     yield
+    await simulator_service.stop_if_running()
     engine.dispose()
     logger.info("SAT-TRIAGE backend shut down cleanly")
 
@@ -110,6 +113,7 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=http_status, content=payload.model_dump(mode="json"))
 
     application.include_router(api_v1_router, prefix=settings.api_v1_prefix)
+    application.mount("/socket.io", socket_asgi_app)
 
     return application
 

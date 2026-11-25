@@ -38,6 +38,12 @@ class Settings(BaseSettings):
         alias="CORS_ORIGINS",
     )
 
+    simulator_satellite_id: str = Field(default="SAT-01", alias="SIMULATOR_SATELLITE_ID")
+    simulator_interval_seconds: float = Field(default=1.0, ge=0.2, le=60.0, alias="SIMULATOR_INTERVAL_SECONDS")
+    simulator_nominal_voltage: float = Field(default=28.0, alias="SIMULATOR_NOMINAL_VOLTAGE")
+    simulator_nominal_temperature: float = Field(default=22.5, alias="SIMULATOR_NOMINAL_TEMPERATURE")
+    simulator_persist_batch_size: int = Field(default=10, ge=1, le=200, alias="SIMULATOR_PERSIST_BATCH_SIZE")
+
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE) if ENV_FILE.exists() else ".env",
         env_file_encoding="utf-8",

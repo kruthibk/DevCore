@@ -12,6 +12,8 @@ export default function Header({
   systemState,
   backendState,
   dbState,
+  socketStatus,
+  simulatorRunning,
   isPolling,
   onManualRefresh,
   onOpenMobileMenu,
@@ -46,6 +48,20 @@ export default function Header({
       ? "PGSQL: OFFLINE"
       : "PGSQL: PROBING";
 
+  const socketVariant =
+    socketStatus === "connected"
+      ? "online"
+      : socketStatus === "connecting"
+      ? "checking"
+      : "offline";
+
+  const socketLabel =
+    socketStatus === "connected"
+      ? "SIO: LIVE"
+      : socketStatus === "connecting"
+      ? "SIO: CONNECTING"
+      : "SIO: OFFLINE";
+
   return (
     <header className="min-h-16 px-4 sm:px-6 py-2.5 border-b border-slate-800/90 bg-[#070c18]/95 flex flex-wrap items-center justify-between gap-3">
       <div className="flex items-center gap-3 min-w-0">
@@ -67,10 +83,15 @@ export default function Header({
         </div>
       </div>
 
-      <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap">
+      <div className="flex items-center gap-2 sm:gap-2 flex-wrap">
         <StatusBadge variant={systemState} label={systemLabel} />
         <StatusBadge variant={backendState} label={apiLabel} />
         <StatusBadge variant={dbState} label={dbLabel} />
+        <StatusBadge variant={socketVariant} label={socketLabel} />
+        <StatusBadge
+          variant={simulatorRunning ? "standby" : "muted"}
+          label={simulatorRunning ? "SIM: RUNNING" : "SIM: STANDBY"}
+        />
 
         <div className="hidden xl:block px-2.5 py-1 rounded border border-slate-800 bg-[#050913] text-[11px] font-mono text-slate-300">
           {formatUtcTimestamp(now)}

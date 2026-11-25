@@ -15,200 +15,168 @@ Satellite ground operations teams monitor thousands of telemetry channels across
 
 **SAT-TRIAGE** is a full-stack satellite telemetry anomaly triage copilot designed to provide operators with a real-time mission-control workspace backed by a resilient API and relational database layer.
 
-**Phase 1 (Current Milestone)** establishes the end-to-end project foundation:
-- Versioned FastAPI backend with structured JSON logging, centralized error handling, CORS, and SQLAlchemy + PostgreSQL integration.
-- Initial `User` ORM model with strict constraints and salted `bcrypt` password hashing (never storing plaintext passwords).
-- Dark satellite mission-control React shell with live backend connectivity, database connectivity, application status, and Recharts probe latency visualization driven by real backend endpoints.
-- Docker Compose PostgreSQL setup and automated backend test suite.
+- **Phase 1:** Versioned FastAPI backend, PostgreSQL via Docker Compose, structured JSON logging, centralized error handling, `User` ORM model with `bcrypt` hashing, and health diagnostics.
+- **Phase 2:** Ground-station Mission Control UI (`Overview`, `Telemetry`, `Alerts`, `Incidents`, `System Diagnostics`) with responsive layout and explicit empty states.
+- **Phase 3 (Current):** Backend NumPy synthetic telemetry generator (`SAT-01`), controllable fault-injection scenarios, `python-socketio` real-time streaming to Recharts dashboards, and bounded batch PostgreSQL persistence (`telemetry_readings`). All generated readings are explicitly marked as **SYNTHETIC SIMULATION DATA**.
 
 ---
 
 ## Architecture
 
-See [docs/architecture.md](docs/architecture.md) for the component diagram and graceful failure-handling flow.
-
-1. **Frontend (`frontend/`)**: React 18 + Vite + Tailwind CSS + Recharts dark mission-control UI polling `GET /health`, `GET /health/db`, and `GET /api/v1/info`.
-2. **Backend (`backend/`)**: FastAPI application with `Pydantic Settings` configuration, request-ID middleware, structured JSON logging, centralized exception handlers, and SQLAlchemy 2.x session management.
-3. **Database (`docker-compose.yml`)**: PostgreSQL 16 (`postgres:16-alpine`) with a persistent Docker volume (`sat_triage_pgdata`) and `pg_isready` health check.
+See [docs/architecture.md](docs/architecture.md) for the full system diagram and telemetry resilience flow.
 
 ---
 
 ## Technology Stack
 
-- **Frontend:** React 18, React Router 7, Vite 5, JavaScript (ES Modules), Tailwind CSS 3, Recharts 2, Lucide React
-- **Backend:** Python 3.14, FastAPI, Uvicorn, SQLAlchemy 2, psycopg 3, Pydantic Settings, bcrypt
+- **Frontend:** React 18, React Router 7, Socket.IO Client 4, Vite 5, JavaScript (ES Modules), Tailwind CSS 3, Recharts 2, Lucide React
+- **Backend:** Python 3.14, FastAPI, Uvicorn, NumPy 2, python-socketio 5, SQLAlchemy 2, psycopg 3, Pydantic Settings, bcrypt
 - **Database:** PostgreSQL 16 via Docker Compose
 - **Testing:** pytest, FastAPI TestClient / httpx
 
 ---
 
-## Folder Structure
+## Sensor Definitions (SAT-01 Synthetic Prototype)
 
-```text
-DevCore/
-├── backend/
-│   ├── app/
-│   │   ├── api/
-│   │   │   └── v1/
-│   │   │       ├── endpoints/
-│   │   │       │   └── info.py
-│   │   │       └── router.py
-│   │   ├── core/
-│   │   │   ├── config.py
-│   │   │   ├── exceptions.py
-│   │   │   ├── logging.py
-│   │   │   └── security.py
-│   │   ├── db/
-│   │   │   ├── base.py
-│   │   │   ├── init_db.py
-│   │   │   └── session.py
-│   │   ├── models/
-│   │   │   └── user.py
-│   │   ├── schemas/
-│   │   │   ├── health.py
-│   │   │   ├── info.py
-│   │   │   └── user.py
-│   │   ├── services/
-│   │   │   └── health_service.py
-│   │   └── main.py
-│   ├── tests/
-│   │   ├── conftest.py
-│   │   ├── test_health.py
-│   │   ├── test_info.py
-│   │   └── test_user_model.py
-│   └── requirements.txt
-├── docs/
-│   └── architecture.md
-├── frontend/
-│   ├── src/
-│   │   ├── api/
-│   │   │   └── client.js
-│   │   ├── components/
-│   │   │   ├── common/
-│   │   │   │   ├── EmptyState.jsx
-│   │   │   │   ├── ErrorState.jsx
-│   │   │   │   ├── LoadingState.jsx
-│   │   │   │   └── StatusBadge.jsx
-│   │   │   ├── dashboard/
-│   │   │   │   ├── AlertSummary.jsx
-│   │   │   │   ├── DiagnosticsPanel.jsx
-│   │   │   │   ├── IncidentSummary.jsx
-│   │   │   │   ├── MetricCard.jsx
-│   │   │   │   ├── SatelliteStatus.jsx
-│   │   │   │   └── TelemetryChart.jsx
-│   │   │   ├── layout/
-│   │   │   │   ├── Header.jsx
-│   │   │   │   ├── MainLayout.jsx
-│   │   │   │   └── Sidebar.jsx
-│   │   │   ├── DiagnosticsView.jsx
-│   │   │   └── LatencyChart.jsx
-│   │   ├── hooks/
-│   │   │   └── useSystemHealth.js
-│   │   ├── pages/
-│   │   │   ├── Alerts.jsx
-│   │   │   ├── Diagnostics.jsx
-│   │   │   ├── Incidents.jsx
-│   │   │   ├── Overview.jsx
-│   │   │   └── Telemetry.jsx
-│   │   ├── App.jsx
-│   │   ├── index.css
-│   │   └── main.jsx
-│   ├── index.html
-│   ├── package.json
-│   ├── postcss.config.js
-│   ├── tailwind.config.js
-│   └── vite.config.js
-├── .env.example
-├── .gitignore
-├── docker-compose.yml
-└── README.md
+| Sensor Name | Unit | Nominal Behavior |
+| :--- | :--- | :--- |
+| `battery_voltage` | `V` | Sinusoidal orbital cycle around `28.0 V` with Gaussian noise |
+| `temperature` | `°C` | Thermal cycle around `22.5 °C` with Gaussian noise |
+| `roll` | `degrees` | Smooth ADCS variation within normal operating bounds |
+| `pitch` | `degrees` | Smooth ADCS variation within normal operating bounds |
+| `yaw` | `degrees` | Smooth ADCS variation within normal operating bounds |
+
+### Synthetic Fault Injection Scenarios
+
+| Fault Type | Effect on Synthetic Telemetry |
+| :--- | :--- |
+| `battery_drop` | Gradually decreases `battery_voltage` (`quality_status: FAULT_SIMULATED`) |
+| `temperature_spike` | Ramps `temperature` above nominal operating range (`quality_status: FAULT_SIMULATED`) |
+| `attitude_disturbance` | Injects large excursions across `roll`, `pitch`, and `yaw` (`quality_status: FAULT_SIMULATED`) |
+| `frozen_sensor` | Freezes a selected `target_sensor` at its last value (`quality_status: FROZEN`) |
+| `missing_data` | Emits `null` readings for a selected `target_sensor` (`quality_status: MISSING`) |
+
+---
+
+## PostgreSQL Schema
+
+### `users`
+- `id` (PK), `username` (unique), `email` (unique), `password_hash`, `role` (`operator` | `analyst` | `admin`), `created_at` (`timestamptz`)
+
+### `telemetry_readings`
+- `id` (PK)
+- `satellite_id` (`varchar(32)`, indexed)
+- `sensor_name` (`varchar(64)`, indexed, check constraint for 5 supported sensors)
+- `sensor_value` (`numeric(12,4)`, nullable for `MISSING` samples)
+- `unit` (`varchar(32)`)
+- `timestamp` (`timestamptz`, indexed via `ix_telemetry_timestamp`)
+- `quality_status` (`varchar(32)`, check constraint: `NOMINAL` | `FAULT_SIMULATED` | `FROZEN` | `MISSING`)
+- Composite lookup index: `ix_telemetry_sat_sensor_ts (satellite_id, sensor_name, timestamp)`
+
+---
+
+## REST API Endpoints
+
+| Method | Path | Description |
+| :--- | :--- | :--- |
+| `GET` | `/health` | Backend service status, version, environment, and uptime. |
+| `GET` | `/health/db` | Executes `SELECT 1` against PostgreSQL (`200` connected, `503` unreachable). |
+| `GET` | `/api/v1/info` | SAT-TRIAGE metadata, API version (`v1`), and Team DevCore details. |
+| `POST` | `/api/v1/simulator/start` | Starts synthetic telemetry generation (rejects duplicate starts with `409`). |
+| `POST` | `/api/v1/simulator/stop` | Stops generation gracefully and flushes pending batch to PostgreSQL. |
+| `GET` | `/api/v1/simulator/status` | Returns running state, sampling interval, active faults, and pipeline counters. |
+| `POST` | `/api/v1/simulator/faults` | Activates a validated fault scenario (`fault_type`, optional `target_sensor`). |
+| `POST` | `/api/v1/simulator/faults/clear` | Clears all active fault scenarios. |
+| `GET` | `/api/v1/telemetry/latest` | Returns latest readings per sensor (live buffer or PostgreSQL fallback). |
+| `GET` | `/api/v1/telemetry/history` | Returns paginated historical telemetry with `sensor_name` and time-range filters. |
+
+---
+
+## Socket.IO Event Contract (`/socket.io`)
+
+### `telemetry:update`
+```json
+{
+  "satellite_id": "SAT-01",
+  "data_origin": "SYNTHETIC SIMULATION DATA",
+  "simulator_running": true,
+  "timestamp": "2026-11-25T12:30:00+00:00",
+  "active_faults": [],
+  "generated_count": 25,
+  "streamed_count": 25,
+  "persisted_count": 20,
+  "last_persistence_error": null,
+  "readings": [
+    {
+      "satellite_id": "SAT-01",
+      "sensor_name": "battery_voltage",
+      "sensor_value": 28.042,
+      "unit": "V",
+      "timestamp": "2026-11-25T12:30:00+00:00",
+      "quality_status": "NOMINAL"
+    }
+  ]
+}
+```
+
+### `simulation:status`
+Broadcasts simulator start/stop/initial connection status (`running`, `interval_seconds`, `active_faults`, `generated_count`, `streamed_count`, `persisted_count`).
+
+### `simulation:fault`
+```json
+{
+  "action": "activated",
+  "data_origin": "SYNTHETIC SIMULATION DATA",
+  "fault_type": "temperature_spike",
+  "target_sensor": null,
+  "active_faults": [
+    { "fault_type": "temperature_spike", "target_sensor": null, "activated_at": "2026-11-25T12:31:00+00:00" }
+  ],
+  "timestamp": "2026-11-25T12:31:00+00:00"
+}
 ```
 
 ---
 
-## Installation Instructions
-
-### Prerequisites
-- Python 3.11+ (tested on Python 3.14.0)
-- Node.js 20+ and npm (tested on Node v24.11.0 / npm 11.6.1)
-- Docker & Docker Compose
+## Installation & Startup
 
 ### 1. Environment Setup
-
-Copy `.env.example` to `.env` at the repository root and update secrets as needed:
-
 ```bash
 cp .env.example .env
 ```
 
-Required environment variables:
-- `DATABASE_URL`: SQLAlchemy PostgreSQL connection string (e.g., `postgresql+psycopg://sat_triage:sat_triage_dev@localhost:5433/sat_triage`)
-- `JWT_SECRET_KEY`: Secret key for token signing (replace placeholder before production)
-- `CORS_ORIGINS`: Comma-separated allowed frontend origins (e.g., `http://localhost:5173,http://127.0.0.1:5173`)
-- `API_HOST`: Bind host for Uvicorn (default `0.0.0.0`)
-- `API_PORT`: Bind port for Uvicorn (default `8000`)
-
 ### 2. Database Setup
-
-Start PostgreSQL using Docker Compose:
-
 ```bash
 docker compose up -d
 docker compose ps
 ```
 
 ### 3. Backend Startup
-
-Create a virtual environment, install dependencies, and start FastAPI:
-
 ```bash
 cd backend
 python -m venv .venv
-# Windows PowerShell:
 .\.venv\Scripts\Activate.ps1
-# macOS/Linux:
-# source .venv/bin/activate
-
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Interactive OpenAPI docs are available at `http://localhost:8000/docs`.
-
 ### 4. Frontend Startup
-
-In a separate terminal:
-
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-Open `http://localhost:5173` in your browser.
-
----
-
-## API Endpoints
-
-| Method | Path | Description |
-| :--- | :--- | :--- |
-| `GET` | `/health` | Returns backend service status, version, environment, and uptime. |
-| `GET` | `/health/db` | Executes `SELECT 1` against PostgreSQL. Returns `200` when connected or `503` with structured error metadata when unreachable. |
-| `GET` | `/api/v1/info` | Returns SAT-TRIAGE metadata, API version (`v1`), and Team DevCore details. |
+Open `http://localhost:5173`.
 
 ---
 
 ## Testing Instructions
 
-Run automated backend tests:
-
 ```bash
 cd backend
 pytest -v tests
 ```
-
-Build the frontend production bundle:
 
 ```bash
 cd frontend
@@ -224,6 +192,8 @@ npm run build
 | :--- | :--- | :--- |
 | `fastapi` | 0.165.0 | MIT |
 | `uvicorn` | 0.54.0 | BSD-3-Clause |
+| `numpy` | 2.5.5 | BSD-3-Clause / MIT / 0BSD / Zlib / CC0-1.0 |
+| `python-socketio` | 5.18.1 | MIT |
 | `sqlalchemy` | 2.1.9 | MIT |
 | `psycopg` | 3.3.9 | LGPL-3.0-only |
 | `pydantic` | 2.14.4 | MIT |
@@ -239,6 +209,7 @@ npm run build
 | `react` | 18.3.1 | MIT |
 | `react-dom` | 18.3.1 | MIT |
 | `react-router-dom` | 7.18.7 | MIT |
+| `socket.io-client` | 4.8.4 | MIT |
 | `recharts` | 2.15.4 | MIT |
 | `lucide-react` | 0.460.0 | ISC |
 | `vite` | 5.4.21 | MIT |

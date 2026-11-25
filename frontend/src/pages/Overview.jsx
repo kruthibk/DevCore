@@ -6,9 +6,23 @@ import DiagnosticsPanel from "../components/dashboard/DiagnosticsPanel";
 import IncidentSummary from "../components/dashboard/IncidentSummary";
 import MetricCard from "../components/dashboard/MetricCard";
 import SatelliteStatus from "../components/dashboard/SatelliteStatus";
+import SimulatorControls from "../components/dashboard/SimulatorControls";
 import TelemetryChart from "../components/dashboard/TelemetryChart";
 
-export default function Overview({ health }) {
+function qualityVariant(qualityStatus) {
+  if (!qualityStatus) return "muted";
+  if (qualityStatus === "NOMINAL") return "nominal";
+  if (qualityStatus === "MISSING") return "critical";
+  return "warning";
+}
+
+function formatMetric(sample) {
+  if (!sample) return "—";
+  if (sample.sensor_value === null || sample.sensor_value === undefined) return "MISSING";
+  return String(sample.sensor_value);
+}
+
+export default function Overview({ health, stream }) {
   const {
     isInitialLoading,
     backendState,
@@ -17,6 +31,44 @@ export default function Overview({ health }) {
     dbHealth,
     refresh,
   } = health;
+
+  const { latestReadings, chartHistory, lastDataUpdate, simulatorStatus, socketStatus } = stream;
+
+  const battery = latestReadings.battery_voltage;
+  const temp = latestReadings.temperature;
+  const roll = latestReadings.roll;
+  const pitch = latestReadings.pitch;
+  const yaw = latestReadings.yaw;
+
+  const samplesList = [battery, temp, roll, pitch, yaw].filter(Boolean);
+  const issueSamples = samplesList.filter((s) => s.quality_status !== "NOMINAL");
+  const integrityStatus =
+    samplesList.length === 0
+      ? "Waiting for telemetry"
+      : issueSamples.length === 0
+      ? "All Nominal"
+      : `${issueSamples.length} Altered`;
+  const integrityVariant =
+    samplesList.length === 0
+      ? "muted"
+      : issueSamples.length === 0
+      ? "nominal"
+      : "warning";
+
+  const attitudeVariant =
+    !roll && !pitch && !yaw
+      ? "muted"
+      : [roll, pitch, yaw].some((s) => s?.quality_status === "MISSING")
+      ? "critical"
+      : [roll, pitch, yaw].some((s) => s && s.quality_status !== "NOMINAL")
+      ? "warning"
+      : "nominal";
+
+  const attitudeLabel =
+    !roll && !pitch && !yaw
+      ? "Waiting for telemetry"
+      : [roll, pitch, yaw].find((s) => s && s.quality_status !== "NOMINAL")?.quality_status ||
+        "NOMINAL";
 
   return (
     <div className="space-y-6">
@@ -42,7 +94,15 @@ export default function Overview({ health }) {
       )}
 
       {/* A. Satellite Status Panel */}
-      <SatelliteStatus lastProbeAt={serviceHealth?.checkedAt} />
+      <SatelliteStatus
+        lastProbeAt={serviceHealth?.checkedAt}
+        lastDataUpdate={lastDataUpdate}
+        simulatorRunning={Boolean(simulatorStatus?.running)}
+        socketStatus={socketStatus}
+      />
+
+      {/* Synthetic Simulator Controls */}
+      <SimulatorControls stream={stream} />
 
       {/* B. Telemetry Metric Cards */}
       <section>
@@ -51,7 +111,7 @@ export default function Overview({ health }) {
             Spacecraft Telemetry Channels
           </h2>
           <span className="text-[11px] font-mono text-slate-500">
-            Source: Phase 3 Simulator (Pending)
+            Source: SYNTHETIC SIMULATION DATA
           </span>
         </div>
 
@@ -59,39 +119,60 @@ export default function Overview({ health }) {
           <MetricCard
             title="Battery Voltage"
             icon={BatteryCharging}
-            value="—"
-            unit="V"
-            statusLabel="Waiting for telemetry"
+            value={formatMetric(battery)}
+            unit={battery ? "V" : "V"}
+            statusLabel={battery?.quality_status || "Waiting for telemetry"}
+            statusVariant={qualityVariant(battery?.quality_status)}
             details="EPS bus voltage nominal range: 24.0V – 29.4V"
           />
 
           <MetricCard
             title="Temperature"
             icon={Thermometer}
-            value="—"
+            value={formatMetric(temp)}
             unit="°C"
-            statusLabel="Waiting for telemetry"
-            details="Thermal subsystem deck sensors on standby"
+            statusLabel={temp?.quality_status || "Waiting for telemetry"}
+            statusVariant={qualityVariant(temp?.quality_status)}
+            details="Thermal subsystem deck sensors"
           />
 
           <MetricCard
             title="Satellite Attitude"
             icon={Compass}
-            statusLabel="Waiting for telemetry"
+            statusLabel={attitudeLabel}
+            statusVariant={attitudeVariant}
             details="ADCS 3-axis orientation (degrees)"
           >
             <div className="grid grid-cols-3 gap-2 font-mono">
               <div className="rounded border border-slate-800 bg-[#060b16] p-2 text-center">
                 <div className="text-[10px] text-slate-500 uppercase">Roll</div>
-                <div className="text-base font-bold text-slate-200 mt-0.5">—°</div>
+                <div className="text-sm font-bold text-slate-200 mt-0.5">
+                  {roll?.sensor_value !== undefined && roll?.sensor_value !== null
+                    ? `${roll.sensor_value}°`
+                    : roll?.quality_status === "MISSING"
+                    ? "N/A"
+                    : "—°"}
+                </div>
               </div>
               <div className="rounded border border-slate-800 bg-[#060b16] p-2 text-center">
                 <div className="text-[10px] text-slate-500 uppercase">Pitch</div>
-                <div className="text-base font-bold text-slate-200 mt-0.5">—°</div>
+                <div className="text-sm font-bold text-slate-200 mt-0.5">
+                  {pitch?.sensor_value !== undefined && pitch?.sensor_value !== null
+                    ? `${pitch.sensor_value}°`
+                    : pitch?.quality_status === "MISSING"
+                    ? "N/A"
+                    : "—°"}
+                </div>
               </div>
               <div className="rounded border border-slate-800 bg-[#060b16] p-2 text-center">
                 <div className="text-[10px] text-slate-500 uppercase">Yaw</div>
-                <div className="text-base font-bold text-slate-200 mt-0.5">—°</div>
+                <div className="text-sm font-bold text-slate-200 mt-0.5">
+                  {yaw?.sensor_value !== undefined && yaw?.sensor_value !== null
+                    ? `${yaw.sensor_value}°`
+                    : yaw?.quality_status === "MISSING"
+                    ? "N/A"
+                    : "—°"}
+                </div>
               </div>
             </div>
           </MetricCard>
@@ -99,21 +180,30 @@ export default function Overview({ health }) {
           <MetricCard
             title="Sensor Integrity"
             icon={ShieldCheck}
-            value="Standby"
-            statusLabel="Waiting for telemetry"
-            details="Sensor-quality issues: — (Pending Phase 3)"
+            value={
+              samplesList.length === 0
+                ? "Standby"
+                : `${samplesList.length - issueSamples.length}/${samplesList.length} OK`
+            }
+            statusLabel={integrityStatus}
+            statusVariant={integrityVariant}
+            details={
+              samplesList.length === 0
+                ? "Sensor-quality issues: — (Start simulator)"
+                : `Sensor quality altered: ${issueSamples.length} channel(s)`
+            }
           />
         </div>
       </section>
 
-      {/* C. Telemetry Charts (Recharts with explicit empty states) */}
+      {/* C. Telemetry Charts (Recharts live Socket.IO bounded history) */}
       <section>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-xs font-mono uppercase tracking-widest text-slate-400">
-            Telemetry Time-Series Channels
+            Telemetry Time-Series Channels (Last 60 Frames)
           </h2>
           <span className="text-[11px] font-mono text-slate-500">
-            No synthetic readings generated in Phase 2
+            Buffered samples: {chartHistory.length} / 60
           </span>
         </div>
 
@@ -122,21 +212,21 @@ export default function Overview({ health }) {
             title="Battery Voltage"
             subtitle="EPS Bus Potential"
             unit="V"
-            data={[]}
-            series={[{ dataKey: "voltage", name: "Battery (V)", color: "#22d3ee" }]}
+            data={chartHistory}
+            series={[{ dataKey: "battery_voltage", name: "Battery (V)", color: "#22d3ee" }]}
           />
           <TelemetryChart
             title="Thermal Profile"
             subtitle="Internal Payload Temperature"
             unit="°C"
-            data={[]}
+            data={chartHistory}
             series={[{ dataKey: "temperature", name: "Temp (°C)", color: "#10b981" }]}
           />
           <TelemetryChart
             title="Satellite Attitude"
             subtitle="Three-Axis Orientation (Roll / Pitch / Yaw)"
             unit="deg"
-            data={[]}
+            data={chartHistory}
             series={[
               { dataKey: "roll", name: "Roll", color: "#22d3ee" },
               { dataKey: "pitch", name: "Pitch", color: "#10b981" },
@@ -146,7 +236,7 @@ export default function Overview({ health }) {
         </div>
       </section>
 
-      {/* D. Alert Summary & E. Incident Overview */}
+      {/* D. Alert Summary & E. Incident Overview (Empty states preserved for Phase 4+) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <AlertSummary />
         <IncidentSummary />

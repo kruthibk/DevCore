@@ -35,7 +35,7 @@ See [docs/architecture.md](docs/architecture.md) for the component diagram and g
 
 ## Technology Stack
 
-- **Frontend:** React 18, Vite 5, JavaScript (ES Modules), Tailwind CSS 3, Recharts 2, Lucide React
+- **Frontend:** React 18, React Router 7, Vite 5, JavaScript (ES Modules), Tailwind CSS 3, Recharts 2, Lucide React
 - **Backend:** Python 3.14, FastAPI, Uvicorn, SQLAlchemy 2, psycopg 3, Pydantic Settings, bcrypt
 - **Database:** PostgreSQL 16 via Docker Compose
 - **Testing:** pytest, FastAPI TestClient / httpx
@@ -84,11 +84,32 @@ DevCore/
 │   │   ├── api/
 │   │   │   └── client.js
 │   │   ├── components/
+│   │   │   ├── common/
+│   │   │   │   ├── EmptyState.jsx
+│   │   │   │   ├── ErrorState.jsx
+│   │   │   │   ├── LoadingState.jsx
+│   │   │   │   └── StatusBadge.jsx
+│   │   │   ├── dashboard/
+│   │   │   │   ├── AlertSummary.jsx
+│   │   │   │   ├── DiagnosticsPanel.jsx
+│   │   │   │   ├── IncidentSummary.jsx
+│   │   │   │   ├── MetricCard.jsx
+│   │   │   │   ├── SatelliteStatus.jsx
+│   │   │   │   └── TelemetryChart.jsx
+│   │   │   ├── layout/
+│   │   │   │   ├── Header.jsx
+│   │   │   │   ├── MainLayout.jsx
+│   │   │   │   └── Sidebar.jsx
 │   │   │   ├── DiagnosticsView.jsx
-│   │   │   ├── Header.jsx
-│   │   │   ├── LatencyChart.jsx
-│   │   │   ├── Sidebar.jsx
-│   │   │   └── StatusCards.jsx
+│   │   │   └── LatencyChart.jsx
+│   │   ├── hooks/
+│   │   │   └── useSystemHealth.js
+│   │   ├── pages/
+│   │   │   ├── Alerts.jsx
+│   │   │   ├── Diagnostics.jsx
+│   │   │   ├── Incidents.jsx
+│   │   │   ├── Overview.jsx
+│   │   │   └── Telemetry.jsx
 │   │   ├── App.jsx
 │   │   ├── index.css
 │   │   └── main.jsx
@@ -217,6 +238,7 @@ npm run build
 | :--- | :--- | :--- |
 | `react` | 18.3.1 | MIT |
 | `react-dom` | 18.3.1 | MIT |
+| `react-router-dom` | 7.18.7 | MIT |
 | `recharts` | 2.15.4 | MIT |
 | `lucide-react` | 0.460.0 | ISC |
 | `vite` | 5.4.21 | MIT |

@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.rbac import ActorContext, require_roles
 from app.db.session import get_db
 from app.schemas.copilot import CopilotAskRequest, CopilotAskResponse, CopilotStatusResponse
 from app.services.copilot_service import copilot_service
@@ -28,6 +29,7 @@ def get_copilot_status() -> CopilotStatusResponse:
 async def ask_copilot(
     payload: CopilotAskRequest,
     db: Session = Depends(get_db),
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> CopilotAskResponse:
     return await copilot_service.ask(request=payload, db=db)
 
@@ -37,7 +39,9 @@ async def ask_copilot(
     response_model=CopilotStatusResponse,
     summary="Deterministically rebuild and validate the runbook FAISS vector index",
 )
-def reindex_runbooks() -> CopilotStatusResponse:
+def reindex_runbooks(
+    _: ActorContext = Depends(require_roles("ADMIN")),
+) -> CopilotStatusResponse:
     try:
         return copilot_service.reindex()
     except RAGIndexError as exc:

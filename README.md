@@ -20,7 +20,8 @@ Satellite ground operations teams monitor thousands of telemetry channels across
 - **Phase 3:** Backend NumPy synthetic telemetry generator (`SAT-01`), controllable fault-injection scenarios, `python-socketio` real-time streaming to Recharts dashboards, and bounded batch PostgreSQL persistence (`telemetry_readings`). All generated readings are explicitly marked as **SYNTHETIC SIMULATION DATA**.
 - **Phase 4:** Statistical anomaly detection (rolling baseline + z-score, rate-of-change, engineering limits using NumPy, Pandas, SciPy), independent cross-signal sensor integrity verification (`MISSING`, `FROZEN`, `INVALID`, `STALE`), deduplicated persistent alerts in PostgreSQL (`alerts`), and live Socket.IO alert/integrity streaming.
 - **Phase 5:** Configurable satellite subsystem dependency graph (`EPS`, `THERMAL`, `ADCS`, `OBC`, `SENSORS`), time-window alert correlation (`120s` default window), rule-based hybrid causal hypothesis engine with supporting/contradicting evidence and illustrative heuristic confidence, persistent `correlations` storage, and interactive `/fault-graph` operator view.
-- **Phase 6 (Current):** Evidence-linked RAG + AI Copilot backed by the three approved troubleshooting runbooks (`ATT-RB-001`, `THM-RB-001`, `BAT-RB-001`), deterministic Markdown chunking, FastEmbed (`BAAI/bge-small-en-v1.5`, 384d) embeddings, persistent FAISS `IndexFlatIP` retrieval (`backend/data/faiss/`), strict citation/hallucination/command guardrails, `/api/v1/copilot/*` endpoints, and interactive `/copilot` Mission Control page.
+- **Phase 6:** Evidence-linked RAG + AI Copilot backed by the three approved troubleshooting runbooks (`ATT-RB-001`, `THM-RB-001`, `BAT-RB-001`), deterministic Markdown chunking, FastEmbed (`BAAI/bge-small-en-v1.5`, 384d) embeddings, persistent FAISS `IndexFlatIP` retrieval (`backend/data/faiss/`), strict citation/hallucination/command guardrails, `/api/v1/copilot/*` endpoints, and interactive `/copilot` Mission Control page.
+- **RBAC & Incident Audit Workflow (Current):** Role-Based Access Control backed by PostgreSQL `users` (`ADMIN`, `OPERATOR`, `VIEWER`, with idempotent demo user seeding and HMAC Bearer / demo header switching) plus PostgreSQL-persisted **Incident Registry & Audit Trail** (`incidents`, `incident_logs`), full `/incidents` lifecycle page (`OPEN` → `INVESTIGATING` → `MITIGATED` → `CLOSED`), live `Overview` incident counters, and 1-click **"Log Incident"** promotion from `Alerts` and `AI Copilot`.
 
 ---
 
@@ -98,8 +99,16 @@ Thresholds are centralized in [detection_config.py](backend/app/core/detection_c
 | `POST` | `/api/v1/fault-graph/correlations/{correlation_id}/acknowledge` | Transitions a correlation hypothesis to `ACKNOWLEDGED` and emits Socket.IO updates. |
 | `POST` | `/api/v1/fault-graph/correlations/{correlation_id}/dismiss` | Transitions a correlation hypothesis to `DISMISSED` and emits Socket.IO updates. |
 | `GET` | `/api/v1/copilot/status` | Returns FAISS index health, document/chunk counts, embedding model, and LLM availability. |
-| `POST` | `/api/v1/copilot/ask` | Runs semantic runbook retrieval and grounded investigative Copilot generation (`generation_status`, `retrieved_evidence`, `answer`). |
-| `POST` | `/api/v1/copilot/reindex` | Deterministically re-ingests `manifest.json` runbooks, computes embeddings, and rebuilds the persisted FAISS index. |
+| `POST` | `/api/v1/copilot/ask` | Runs semantic runbook retrieval and grounded investigative Copilot generation (`OPERATOR`/`ADMIN`). |
+| `POST` | `/api/v1/copilot/reindex` | Deterministically re-ingests `manifest.json` runbooks and rebuilds the FAISS index (`ADMIN` only). |
+| `POST` | `/api/v1/auth/login` | Authenticates against PostgreSQL `users` and returns a signed Bearer token. |
+| `GET` | `/api/v1/auth/me` | Returns the resolved RBAC actor (`ADMIN`, `OPERATOR`, or `VIEWER`). |
+| `GET` | `/api/v1/users` | Lists platform user metadata without exposing `password_hash`. |
+| `GET` | `/api/v1/incidents` | Lists tracked incidents and aggregate status counts. |
+| `POST` | `/api/v1/incidents` | Creates an incident and records its `CREATED` audit entry (`OPERATOR`/`ADMIN`). |
+| `GET` | `/api/v1/incidents/{incident_id}` | Returns full incident details and chronological `incident_logs`. |
+| `PATCH` | `/api/v1/incidents/{incident_id}` | Transitions status/assignee and appends a `STATUS_CHANGE` audit entry (`OPERATOR`/`ADMIN`). |
+| `POST` | `/api/v1/incidents/{incident_id}/logs` | Appends an immutable `NOTE_ADDED` entry (`OPERATOR`/`ADMIN`). |
 
 ---
 
@@ -150,6 +159,17 @@ Troubleshooting runbooks are stored under `backend/data/runbooks/` alongside [ma
 - **Subsystem Ownership:** `BAT-RB-001` owns battery voltage and battery temperature in an electrical-power context; `THM-RB-001` owns broader spacecraft thermal behaviour; `ATT-RB-001` owns `roll`, `pitch`, and `yaw` (preserving `+179°` to `-179°` angle-wrapping semantics).
 - **Telemetry Constraints:** The simulator supports only `battery_voltage`, `temperature`, `roll`, `pitch`, and `yaw`; candidate fields such as `battery_current`, `battery_soc`, `angular_velocity`, `reaction_wheel_speed`, or extra temperature sensors must never be fabricated.
 - **Safety:** Statistical anomaly detectors remain authoritative; guidance remains strictly investigative (no autonomous spacecraft commands, no invented universal limits, no unsupported root-cause claims, ungrounded citations stripped, and correlation never proves causation).
+
+---
+
+## RBAC & Incident Log Audit Workflow
+
+- **Roles & Permissions (`users` table):**
+  - `VIEWER`: Read-only access across all dashboards; state-changing endpoints return `HTTP 403`.
+  - `OPERATOR` (default unauthenticated demo access): Acknowledge/resolve alerts, dismiss/acknowledge correlations, query `/api/v1/copilot/ask`, create/transition incidents, and append investigation notes.
+  - `ADMIN`: Full access including simulator lifecycle/fault injection (`/api/v1/simulator/*`) and FAISS reindexing (`/api/v1/copilot/reindex`).
+- **Demo Accounts (seeded idempotently on startup):** `admin` / `AdminPass!2026`, `operator` / `OperatorPass!2026`, `viewer` / `ViewerPass!2026` (plus 1-click Header Role Switcher using `X-Operator-Role` headers).
+- **Incident Lifecycle & Audit Trail (`incidents`, `incident_logs`):** Supports `OPEN` → `INVESTIGATING` → `MITIGATED` → `CLOSED` transitions, 1-click promotion from `Alerts` and `AI Copilot`, and immutable chronological `CREATED`, `STATUS_CHANGE`, and `NOTE_ADDED` logs.
 
 ---
 

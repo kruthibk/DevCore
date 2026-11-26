@@ -1,13 +1,21 @@
-"""Initial User ORM model with strict constraints."""
+"""User ORM model with RBAC constraints."""
 
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Integer, String, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
-ALLOWED_USER_ROLES = ("operator", "analyst", "admin")
+ALLOWED_USER_ROLES = (
+    "ADMIN",
+    "OPERATOR",
+    "VIEWER",
+    "admin",
+    "operator",
+    "viewer",
+    "analyst",
+)
 
 
 class User(Base):
@@ -19,7 +27,7 @@ class User(Base):
         CheckConstraint("length(trim(email)) >= 5", name="ck_users_email_min_len"),
         CheckConstraint("length(password_hash) > 0", name="ck_users_password_hash_non_empty"),
         CheckConstraint(
-            "role IN ('operator', 'analyst', 'admin')",
+            "role IN ('ADMIN', 'OPERATOR', 'VIEWER', 'admin', 'operator', 'viewer', 'analyst')",
             name="ck_users_valid_role",
         ),
     )
@@ -28,7 +36,8 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[str] = mapped_column(String(32), nullable=False, default="operator", server_default="operator")
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="OPERATOR", server_default="OPERATOR")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

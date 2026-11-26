@@ -13,6 +13,7 @@ import ErrorState from "../components/common/ErrorState";
 import LoadingState from "../components/common/LoadingState";
 import StatusBadge from "../components/common/StatusBadge";
 import CausalGraphCanvas from "../components/faultgraph/CausalGraphCanvas";
+import { useAuth } from "../context/AuthContext";
 
 function statusVariant(status) {
   if (status === "ACTIVE") return "critical";
@@ -21,6 +22,7 @@ function statusVariant(status) {
 }
 
 export default function FaultGraph({ stream }) {
+  const { canOperate, role } = useAuth();
   const {
     faultGraph,
     correlations,
@@ -94,6 +96,9 @@ export default function FaultGraph({ stream }) {
             variant="muted"
             label={`Dismissed: ${correlationSummary?.dismissed ?? 0}`}
           />
+          {!canOperate && (
+            <StatusBadge variant="warning" label={`${role} (READ-ONLY)`} />
+          )}
         </div>
       </div>
 
@@ -406,9 +411,11 @@ export default function FaultGraph({ stream }) {
                   <button
                     type="button"
                     disabled={
+                      !canOperate ||
                       selectedCorrelation.status !== "ACTIVE" ||
                       pendingCorrelationAction === `ack:${selectedCorrelation.correlation_id}`
                     }
+                    title={!canOperate ? "VIEWER role is read-only" : "Acknowledge correlation hypothesis"}
                     onClick={() => acknowledgeCorrelation(selectedCorrelation.correlation_id)}
                     className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded border border-amber-500/35 bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 disabled:opacity-35 disabled:cursor-not-allowed"
                   >
@@ -418,9 +425,11 @@ export default function FaultGraph({ stream }) {
                   <button
                     type="button"
                     disabled={
+                      !canOperate ||
                       selectedCorrelation.status === "DISMISSED" ||
                       pendingCorrelationAction === `dismiss:${selectedCorrelation.correlation_id}`
                     }
+                    title={!canOperate ? "VIEWER role is read-only" : "Dismiss correlation hypothesis"}
                     onClick={() => dismissCorrelation(selectedCorrelation.correlation_id)}
                     className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded border border-slate-600 bg-slate-800 hover:bg-slate-700 text-slate-200 disabled:opacity-35 disabled:cursor-not-allowed"
                   >

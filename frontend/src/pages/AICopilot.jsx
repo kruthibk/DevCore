@@ -5,6 +5,7 @@ import {
   Bot,
   CheckCircle2,
   Database,
+  FilePlus2,
   FileText,
   HelpCircle,
   Loader2,
@@ -13,11 +14,13 @@ import {
   Send,
   ShieldAlert,
 } from "lucide-react";
-import { askCopilot, fetchCopilotStatus, reindexCopilot } from "../api/client";
+import { Link } from "react-router-dom";
+import { askCopilot, createIncident, fetchCopilotStatus, reindexCopilot } from "../api/client";
 import EmptyState from "../components/common/EmptyState";
 import ErrorState from "../components/common/ErrorState";
 import LoadingState from "../components/common/LoadingState";
 import StatusBadge from "../components/common/StatusBadge";
+import { useAuth } from "../context/AuthContext";
 
 const SUGGESTED_QUESTIONS = [
   {
@@ -69,6 +72,7 @@ function generationStatusBadge(status) {
 
 export default function AICopilot({ stream }) {
   const { alerts = [], correlations = [] } = stream || {};
+  const { canOperate, isAdmin, role } = useAuth();
 
   const [statusData, setStatusData] = useState(null);
   const [statusLoading, setStatusLoading] = useState(true);
@@ -86,6 +90,9 @@ export default function AICopilot({ stream }) {
   const [askError, setAskError] = useState(null);
   const [responseData, setResponseData] = useState(null);
   const [expandedChunkId, setExpandedChunkId] = useState(null);
+  const [loggingIncident, setLoggingIncident] = useState(false);
+  const [createdIncident, setCreatedIncident] = useState(null);
+  const [incidentLogError, setIncidentLogError] = useState(null);
 
   const loadStatus = useCallback(async () => {
     setStatusLoading(true);
@@ -152,10 +159,59 @@ export default function AICopilot({ stream }) {
   };
 
   const handleSuggestedClick = async (preset) => {
+    if (!canOperate) return;
     setQuestion(preset.question);
     setSubsystem(preset.subsystem);
     setAnomalyId("");
     await submitQuestion(preset.question, preset.subsystem);
+  };
+
+  const handleLogCopilotIncident = async () => {
+    if (!responseData || !canOperate) return;
+    setLoggingIncident(true);
+    setIncidentLogError(null);
+    setCreatedIncident(null);
+
+    const linkedAlert = responseData.verified_context?.alert;
+    const summaryText =
+      responseData.answer?.anomaly_summary ||
+      responseData.evidence_message ||
+      responseData.question;
+    const inferredSubsystem =
+      subsystem ||
+      responseData.retrieved_evidence?.[0]?.subsystem ||
+      "GENERAL";
+    const citationsText = (responseData.answer?.citations || [])
+      .map((c) => `${c.runbook_id} (${c.section_heading})`)
+      .join("; ");
+    const checksText = (responseData.answer?.recommended_investigative_checks || [])
+      .slice(0, 3)
+      .join(" | ");
+    const copilotDigest = [
+      `Question: ${responseData.question}`,
+      `Summary: ${summaryText}`,
+      checksText ? `Checks: ${checksText}` : null,
+      citationsText ? `Citations: ${citationsText}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    const res = await createIncident({
+      title: `Copilot Triage: ${summaryText}`.slice(0, 200),
+      summary: summaryText,
+      subsystem: inferredSubsystem,
+      severity: linkedAlert?.severity || "WARNING",
+      linked_alert_ids: linkedAlert?.alert_id ? [linkedAlert.alert_id] : [],
+      copilot_summary: copilotDigest,
+      note: `Promoted from AI Copilot (${responseData.generation_status}).`,
+    });
+
+    setLoggingIncident(false);
+    if (res.ok && res.data) {
+      setCreatedIncident(res.data);
+    } else {
+      setIncidentLogError(res.error || "Failed to log incident");
+    }
   };
 
   const genBadge = responseData ? generationStatusBadge(responseData.generation_status) : null;
@@ -236,12 +292,16 @@ export default function AICopilot({ stream }) {
               </div>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-2 shrink-0 flex-wrap">
+              {!isAdmin && (
+                <StatusBadge variant="warning" label={`REINDEX: ADMIN ONLY (${role})`} />
+              )}
               <button
                 type="button"
                 onClick={handleReindex}
-                disabled={reindexing}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded border border-cyan-500/40 bg-cyan-500/10 hover:bg-cyan-500/20 text-xs font-mono text-cyan-200 disabled:opacity-50"
+                disabled={!isAdmin || reindexing}
+                title={!isAdmin ? "Rebuilding FAISS index requires ADMIN role" : "Rebuild FAISS index"}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded border border-cyan-500/40 bg-cyan-500/10 hover:bg-cyan-500/20 text-xs font-mono text-cyan-200 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${reindexing ? "animate-spin" : ""}`} />
                 {reindexing
@@ -378,9 +438,10 @@ export default function AICopilot({ stream }) {
               <button
                 key={preset.label}
                 type="button"
-                disabled={asking}
+                disabled={!canOperate || asking}
+                title={!canOperate ? "VIEWER role is read-only" : undefined}
                 onClick={() => handleSuggestedClick(preset)}
-                className="text-left text-xs px-2.5 py-1 rounded border border-slate-700/80 bg-[#0b1224] hover:border-cyan-500/40 hover:text-cyan-200 text-slate-300 transition-colors disabled:opacity-50"
+                className="text-left text-xs px-2.5 py-1 rounded border border-slate-700/80 bg-[#0b1224] hover:border-cyan-500/40 hover:text-cyan-200 text-slate-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {preset.label}
               </button>
@@ -388,18 +449,24 @@ export default function AICopilot({ stream }) {
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-3 pt-1">
+        <div className="flex items-center justify-between gap-3 pt-1 flex-wrap">
           <div className="text-[11px] text-slate-500 font-mono">
             Supported telemetry context: battery_voltage, temperature, roll, pitch, yaw
           </div>
-          <button
-            type="submit"
-            disabled={asking}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/50 text-xs font-mono font-semibold text-cyan-100 disabled:opacity-50"
-          >
-            {asking ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-            {asking ? "Retrieving & Analyzing..." : "Ask AI Copilot"}
-          </button>
+          <div className="flex items-center gap-2">
+            {!canOperate && (
+              <StatusBadge variant="warning" label="VIEWER (READ-ONLY)" />
+            )}
+            <button
+              type="submit"
+              disabled={!canOperate || asking}
+              title={!canOperate ? "VIEWER role cannot invoke Copilot queries" : undefined}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/50 text-xs font-mono font-semibold text-cyan-100 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {asking ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              {asking ? "Retrieving & Analyzing..." : "Ask AI Copilot"}
+            </button>
+          </div>
         </div>
       </form>
 
@@ -443,10 +510,40 @@ export default function AICopilot({ stream }) {
                   }
                 />
               </div>
-              <span className="text-[11px] font-mono text-slate-500">
-                {new Date(responseData.timestamp).toISOString().replace("T", " ").slice(0, 19)} UTC
-              </span>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  disabled={!canOperate || loggingIncident}
+                  title={!canOperate ? "VIEWER role is read-only" : "Log Copilot triage finding as an Incident"}
+                  onClick={handleLogCopilotIncident}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-cyan-500/40 bg-cyan-500/15 hover:bg-cyan-500/25 text-xs font-mono text-cyan-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <FilePlus2 className="w-3.5 h-3.5" />
+                  <span>{loggingIncident ? "Logging..." : "Log Incident"}</span>
+                </button>
+                <span className="text-[11px] font-mono text-slate-500">
+                  {new Date(responseData.timestamp).toISOString().replace("T", " ").slice(0, 19)} UTC
+                </span>
+              </div>
             </div>
+
+            {incidentLogError && (
+              <div className="rounded border border-rose-500/35 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                {incidentLogError}
+              </div>
+            )}
+
+            {createdIncident && (
+              <div className="rounded border border-emerald-500/35 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200 flex items-center justify-between gap-2">
+                <span>Incident logged: {createdIncident.incident_id}</span>
+                <Link
+                  to={`/incidents?id=${encodeURIComponent(createdIncident.incident_id)}`}
+                  className="underline font-semibold text-cyan-300"
+                >
+                  Open Incident →
+                </Link>
+              </div>
+            )}
 
             <div className="text-xs text-slate-300">{responseData.evidence_message}</div>
 

@@ -5,6 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.core.rbac import ActorContext, require_roles
 from app.db.session import get_db
 from app.realtime.socket_manager import emit_alert_updated, emit_detection_status
 from app.schemas.alerts import (
@@ -80,6 +81,7 @@ async def acknowledge_alert(
     alert_id: str,
     db: Session = Depends(get_db),
     pipeline: DetectionPipelineService = Depends(get_detection_pipeline),
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> AlertRead:
     updated = AlertService.acknowledge_alert(db=db, alert_id=alert_id)
     await emit_alert_updated(updated.model_dump(mode="json"))
@@ -97,6 +99,7 @@ async def resolve_alert(
     alert_id: str,
     db: Session = Depends(get_db),
     pipeline: DetectionPipelineService = Depends(get_detection_pipeline),
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> AlertRead:
     updated = AlertService.resolve_alert(db=db, alert_id=alert_id)
     await emit_alert_updated(updated.model_dump(mode="json"))

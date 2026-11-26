@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import ErrorState from "../common/ErrorState";
 import StatusBadge from "../common/StatusBadge";
+import { useAuth } from "../../context/AuthContext";
 
 const SENSOR_OPTIONS = [
   { value: "battery_voltage", label: "Battery Voltage (V)" },
@@ -34,10 +35,12 @@ export default function SimulatorControls({ stream }) {
     clearFaults,
   } = stream;
 
+  const { isAdmin, role } = useAuth();
   const [targetSensor, setTargetSensor] = useState("temperature");
   const isRunning = Boolean(simulatorStatus?.running);
   const activeFaults = simulatorStatus?.active_faults || [];
   const isBusy = Boolean(pendingAction);
+  const adminLocked = !isAdmin;
 
   return (
     <section className="rounded-lg border border-slate-800 bg-[#090f1e] p-5 space-y-4">
@@ -59,6 +62,12 @@ export default function SimulatorControls({ stream }) {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {adminLocked && (
+            <StatusBadge
+              variant="warning"
+              label={`ADMIN ONLY (CURRENT: ${role})`}
+            />
+          )}
           <StatusBadge
             variant={isRunning ? "online" : "muted"}
             label={isRunning ? "SIM: RUNNING" : "SIM: STOPPED"}
@@ -90,7 +99,8 @@ export default function SimulatorControls({ stream }) {
           <button
             type="button"
             onClick={() => start()}
-            disabled={isRunning || isBusy}
+            disabled={adminLocked || isRunning || isBusy}
+            title={adminLocked ? "Requires ADMIN role" : "Start synthetic telemetry generator"}
             className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border border-emerald-500/40 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 text-xs font-mono font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <Play className="w-3.5 h-3.5" />
@@ -100,7 +110,8 @@ export default function SimulatorControls({ stream }) {
           <button
             type="button"
             onClick={() => stop()}
-            disabled={!isRunning || isBusy}
+            disabled={adminLocked || !isRunning || isBusy}
+            title={adminLocked ? "Requires ADMIN role" : "Stop synthetic telemetry generator"}
             className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border border-rose-500/40 bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 text-xs font-mono font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <Square className="w-3.5 h-3.5" />
@@ -110,7 +121,8 @@ export default function SimulatorControls({ stream }) {
           <button
             type="button"
             onClick={() => clearFaults()}
-            disabled={activeFaults.length === 0 || isBusy}
+            disabled={adminLocked || activeFaults.length === 0 || isBusy}
+            title={adminLocked ? "Requires ADMIN role" : "Clear active faults"}
             className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border border-slate-700 bg-slate-800/70 hover:bg-slate-700/80 text-slate-200 text-xs font-mono disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <RotateCcw className="w-3.5 h-3.5" />
@@ -146,9 +158,10 @@ export default function SimulatorControls({ stream }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
           <button
             type="button"
-            disabled={isBusy}
+            disabled={adminLocked || isBusy}
+            title={adminLocked ? "Requires ADMIN role" : "Inject battery drop fault"}
             onClick={() => injectFault("battery_drop")}
-            className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-200 text-xs font-mono disabled:opacity-40 transition-colors"
+            className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-200 text-xs font-mono disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <BatteryWarning className="w-3.5 h-3.5 shrink-0" />
             <span>Battery Drop</span>
@@ -156,9 +169,10 @@ export default function SimulatorControls({ stream }) {
 
           <button
             type="button"
-            disabled={isBusy}
+            disabled={adminLocked || isBusy}
+            title={adminLocked ? "Requires ADMIN role" : "Inject temperature spike fault"}
             onClick={() => injectFault("temperature_spike")}
-            className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-200 text-xs font-mono disabled:opacity-40 transition-colors"
+            className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-200 text-xs font-mono disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <Flame className="w-3.5 h-3.5 shrink-0" />
             <span>Temp Spike</span>
@@ -166,9 +180,10 @@ export default function SimulatorControls({ stream }) {
 
           <button
             type="button"
-            disabled={isBusy}
+            disabled={adminLocked || isBusy}
+            title={adminLocked ? "Requires ADMIN role" : "Inject attitude disturbance fault"}
             onClick={() => injectFault("attitude_disturbance")}
-            className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-200 text-xs font-mono disabled:opacity-40 transition-colors"
+            className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-200 text-xs font-mono disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <Compass className="w-3.5 h-3.5 shrink-0" />
             <span>Attitude Disturbance</span>
@@ -176,9 +191,10 @@ export default function SimulatorControls({ stream }) {
 
           <button
             type="button"
-            disabled={isBusy}
+            disabled={adminLocked || isBusy}
+            title={adminLocked ? "Requires ADMIN role" : "Inject frozen sensor fault"}
             onClick={() => injectFault("frozen_sensor", targetSensor)}
-            className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded border border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-200 text-xs font-mono disabled:opacity-40 transition-colors"
+            className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded border border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-200 text-xs font-mono disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <PauseOctagon className="w-3.5 h-3.5 shrink-0" />
             <span>Frozen Sensor</span>
@@ -186,9 +202,10 @@ export default function SimulatorControls({ stream }) {
 
           <button
             type="button"
-            disabled={isBusy}
+            disabled={adminLocked || isBusy}
+            title={adminLocked ? "Requires ADMIN role" : "Inject missing data fault"}
             onClick={() => injectFault("missing_data", targetSensor)}
-            className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-200 text-xs font-mono disabled:opacity-40 transition-colors"
+            className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-200 text-xs font-mono disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <Slash className="w-3.5 h-3.5 shrink-0" />
             <span>Missing Data</span>

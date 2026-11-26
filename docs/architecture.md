@@ -9,7 +9,8 @@ SAT-TRIAGE is a full-stack web platform for satellite telemetry anomaly triage, 
 - **Phase 3:** Backend-driven NumPy synthetic telemetry simulator (`SAT-01`), fault-injection scenarios, Socket.IO real-time streaming, and bounded batch PostgreSQL persistence.
 - **Phase 4:** Statistical anomaly detection (NumPy, Pandas, SciPy), cross-signal sensor integrity verification, deduplicated persistent alerts, and live Socket.IO alert streaming.
 - **Phase 5:** Configurable satellite subsystem dependency graph (`EPS`, `THERMAL`, `ADCS`, `OBC`, `SENSORS`), time-window alert correlation, deterministic rule-based hybrid causal hypothesis engine, persistent `correlations` storage, live graph/correlation Socket.IO events, and interactive `/fault-graph` Mission Control view.
-- **Phase 6 (Current):** Evidence-linked RAG runbook knowledge base (`ATT-RB-001`, `THM-RB-001`, `BAT-RB-001`), deterministic Markdown chunking, FastEmbed dense embeddings (`BAAI/bge-small-en-v1.5`), persistent FAISS similarity retrieval, grounded AI Copilot service with citation traceability and safety guardrails, `/api/v1/copilot/*` REST APIs, and interactive `/copilot` Mission Control page.
+- **Phase 6:** Evidence-linked RAG runbook knowledge base (`ATT-RB-001`, `THM-RB-001`, `BAT-RB-001`), deterministic Markdown chunking, FastEmbed dense embeddings (`BAAI/bge-small-en-v1.5`), persistent FAISS similarity retrieval, grounded AI Copilot service with citation traceability and safety guardrails, `/api/v1/copilot/*` REST APIs, and interactive `/copilot` Mission Control page.
+- **RBAC & Incident Audit Trail:** PostgreSQL-backed `users` RBAC (`ADMIN`, `OPERATOR`, `VIEWER` via Bearer tokens or `X-Operator-Role` headers, defaulting unauthenticated sessions to `OPERATOR`), idempotent demo seeding, `incidents` and immutable `incident_logs` tables, `/api/v1/incidents*` REST APIs, Header Role Switcher, full `/incidents` UI, and 1-click incident promotion from `Alerts` and `AI Copilot`.
 
 ## Component Flow
 
@@ -105,3 +106,11 @@ SAT-TRIAGE is a full-stack web platform for satellite telemetry anomaly triage, 
    - Supplies only verified telemetry readings (`battery_voltage`, `temperature`, `roll`, `pitch`, `yaw`), persisted PostgreSQL alerts/correlations, and retrieved runbook chunks to the optional configured LLM (`GEMINI_API_KEY` with default `gemini-3.1-flash-lite`, `OPENAI_API_KEY`, or `LLM_API_KEY`).
    - If no LLM key is configured, vector retrieval still executes and returns `generation_status = "LLM_UNAVAILABLE"` with inspectable chunks rather than fabricated AI answers.
    - Post-generation guardrails strip ungrounded citations not matching retrieved `chunk_id` / `(runbook_id, section_heading)`, reject fabricated unsupported telemetry channels (`battery_current`, `battery_soc`, `angular_velocity`, `reaction_wheel_speed`, `electronics_temperature`), block autonomous spacecraft command language, enforce correlation != causation, and handle malformed LLM JSON safely (`MALFORMED_LLM_RESPONSE`).
+
+## RBAC & Incident Log Audit Trail
+
+1. **Role-Based Access Control (`rbac.py`, `auth.py`):**
+   - Resolves `ActorContext` from `Authorization: Bearer <token>` (HMAC-SHA256 signed token), `X-Operator-Role` / `X-Operator-Name` headers, or unauthenticated `OPERATOR` demo fallback.
+   - `VIEWER` is strictly read-only (`HTTP 403` on mutations and Copilot queries); `OPERATOR` handles alert triage, Copilot queries, and incident workflows; `ADMIN` controls simulator fault injection and FAISS reindexing.
+2. **Incident Registry & Immutable Audit Trail (`incident.py`, `incident_service.py`, `incidents.py`):**
+   - Persists `incidents` (`INC-XXXXXXXX`, `OPEN` → `INVESTIGATING` → `MITIGATED` → `CLOSED`, `linked_alert_ids`, `copilot_summary`) and chronological `incident_logs` (`CREATED`, `STATUS_CHANGE`, `NOTE_ADDED`) in PostgreSQL.

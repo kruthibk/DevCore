@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.fault_graph_config import DEFAULT_CORRELATION_WINDOW_SECONDS
+from app.core.rbac import ActorContext, require_roles
 from app.db.session import get_db
 from app.realtime.socket_manager import emit_correlation_updated, emit_fault_graph_update
 from app.schemas.fault_graph import (
@@ -93,6 +94,7 @@ def get_correlation(
 async def acknowledge_correlation(
     correlation_id: str,
     db: Session = Depends(get_db),
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> CorrelationRead:
     updated = CorrelationService.acknowledge_correlation(db=db, correlation_id=correlation_id)
     await emit_correlation_updated(updated.model_dump(mode="json"))
@@ -109,6 +111,7 @@ async def acknowledge_correlation(
 async def dismiss_correlation(
     correlation_id: str,
     db: Session = Depends(get_db),
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> CorrelationRead:
     updated = CorrelationService.dismiss_correlation(db=db, correlation_id=correlation_id)
     await emit_correlation_updated(updated.model_dump(mode="json"))

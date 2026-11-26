@@ -1,8 +1,22 @@
 import { ClipboardList, FileCheck2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import EmptyState from "../common/EmptyState";
+import StatusBadge from "../common/StatusBadge";
 
-export default function IncidentSummary({ counts = null, incidents = [] }) {
+function incidentStatusVariant(status) {
+  if (status === "OPEN") return "critical";
+  if (status === "INVESTIGATING") return "warning";
+  if (status === "MITIGATED") return "info";
+  return "nominal";
+}
+
+function severityVariant(severity) {
+  if (severity === "CRITICAL") return "critical";
+  if (severity === "WARNING") return "warning";
+  return "info";
+}
+
+export default function IncidentSummary({ counts = null, incidents = [], error = null }) {
   const total = counts?.total ?? "—";
   const open = counts?.open ?? "—";
   const resolved = counts?.resolved ?? "—";
@@ -41,15 +55,47 @@ export default function IncidentSummary({ counts = null, incidents = [] }) {
         <div className="text-xs font-mono uppercase tracking-wider text-slate-500 mb-2">
           Recent Incidents
         </div>
-        {incidents.length === 0 ? (
+
+        {error ? (
+          <div className="rounded border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200 font-mono">
+            {error}
+          </div>
+        ) : incidents.length === 0 ? (
           <EmptyState
             icon={ClipboardList}
-            title="Incident management will be enabled in a later phase."
-            description="Backend incident workflows, root-cause records, and operator approvals are scheduled for upcoming phases."
-            phaseBadge="Scheduled Later Phase"
+            title="No tracked incidents yet."
+            description="Log an incident from Alerts, AI Copilot, or the Incidents page to begin tracked operator triage."
+            phaseBadge="Incident Registry Ready"
             compact
           />
-        ) : null}
+        ) : (
+          <div className="space-y-2">
+            {incidents.slice(0, 4).map((inc) => (
+              <Link
+                key={inc.incident_id}
+                to={`/incidents?id=${encodeURIComponent(inc.incident_id)}`}
+                className="block rounded border border-slate-800 bg-[#060b16] hover:border-cyan-500/40 p-2.5 transition-colors"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-[11px] font-mono font-semibold text-cyan-300 shrink-0">
+                      {inc.incident_id}
+                    </span>
+                    <span className="text-xs text-slate-200 truncate">{inc.title}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <StatusBadge variant={severityVariant(inc.severity)} label={inc.severity} showDot={false} />
+                    <StatusBadge variant={incidentStatusVariant(inc.status)} label={inc.status} showDot={false} />
+                  </div>
+                </div>
+                <div className="mt-1 text-[10px] font-mono text-slate-500 flex items-center justify-between">
+                  <span>subsystem: {inc.subsystem}</span>
+                  <span>by {inc.created_by}</span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
       </div>
     </section>
   );

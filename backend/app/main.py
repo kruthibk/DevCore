@@ -27,7 +27,7 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Initialize resources on startup and release cleanly on shutdown."""
+    """Initialize database schema, RBAC demo users, and release resources cleanly on shutdown."""
     logger.info(
         "Starting SAT-TRIAGE backend",
         extra={

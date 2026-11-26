@@ -1,5 +1,32 @@
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/$/, "");
 
+export const STORAGE_KEYS = {
+  role: "sat_triage_role",
+  username: "sat_triage_username",
+  token: "sat_triage_token",
+};
+
+function getAuthHeaders() {
+  try {
+    const token = localStorage.getItem(STORAGE_KEYS.token);
+    if (token) {
+      return { Authorization: `Bearer ${token}` };
+    }
+    const role = localStorage.getItem(STORAGE_KEYS.role) || "OPERATOR";
+    const username =
+      localStorage.getItem(STORAGE_KEYS.username) || `demo-${role.toLowerCase()}`;
+    return {
+      "X-Operator-Role": role,
+      "X-Operator-Name": username,
+    };
+  } catch {
+    return {
+      "X-Operator-Role": "OPERATOR",
+      "X-Operator-Name": "flight-ops-demo",
+    };
+  }
+}
+
 async function requestEndpoint(path, options = {}) {
   const started = performance.now();
   const controller = new AbortController();
@@ -11,6 +38,7 @@ async function requestEndpoint(path, options = {}) {
       method: options.method || "GET",
       headers: {
         Accept: "application/json",
+        ...getAuthHeaders(),
         ...(options.body ? { "Content-Type": "application/json" } : {}),
       },
       body: options.body ? JSON.stringify(options.body) : undefined,
@@ -229,5 +257,62 @@ export function askCopilot(payload) {
     method: "POST",
     body: payload,
     timeoutMs: 35000,
+  });
+}
+
+export function loginUser(username, password) {
+  return requestEndpoint("/api/v1/auth/login", {
+    method: "POST",
+    body: { username, password },
+  });
+}
+
+export function fetchAuthMe() {
+  return requestEndpoint("/api/v1/auth/me");
+}
+
+export function fetchUsers() {
+  return requestEndpoint("/api/v1/users");
+}
+
+export function fetchIncidents({
+  status = null,
+  severity = null,
+  subsystem = null,
+  limit = 50,
+  offset = 0,
+} = {}) {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (status) params.set("status", status);
+  if (severity) params.set("severity", severity);
+  if (subsystem) params.set("subsystem", subsystem);
+  return requestEndpoint(`/api/v1/incidents?${params.toString()}`);
+}
+
+export function createIncident(payload) {
+  return requestEndpoint("/api/v1/incidents", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function fetchIncidentDetail(incidentId) {
+  return requestEndpoint(`/api/v1/incidents/${encodeURIComponent(incidentId)}`);
+}
+
+export function updateIncident(incidentId, payload) {
+  return requestEndpoint(`/api/v1/incidents/${encodeURIComponent(incidentId)}`, {
+    method: "PATCH",
+    body: payload,
+  });
+}
+
+export function addIncidentLog(incidentId, note) {
+  return requestEndpoint(`/api/v1/incidents/${encodeURIComponent(incidentId)}/logs`, {
+    method: "POST",
+    body: { note },
   });
 }

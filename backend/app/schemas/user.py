@@ -1,11 +1,12 @@
-"""Pydantic schemas for User representation (never exposing password_hash)."""
+"""Pydantic schemas for User representation, RBAC, and Auth (never exposing password_hash)."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-UserRole = Literal["operator", "analyst", "admin"]
+RbacRole = Literal["ADMIN", "OPERATOR", "VIEWER"]
+UserRole = Literal["ADMIN", "OPERATOR", "VIEWER", "admin", "operator", "viewer", "analyst"]
 
 
 class UserCreate(BaseModel):
@@ -14,7 +15,7 @@ class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=50)
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
-    role: UserRole = "operator"
+    role: UserRole = "OPERATOR"
 
 
 class UserRead(BaseModel):
@@ -26,4 +27,36 @@ class UserRead(BaseModel):
     username: str
     email: EmailStr
     role: UserRole
+    is_active: bool = True
     created_at: datetime
+
+
+class LoginRequest(BaseModel):
+    """Credentials for obtaining a signed RBAC session token."""
+
+    username: str = Field(..., min_length=1, max_length=50)
+    password: str = Field(..., min_length=1, max_length=128)
+
+
+class ActorRead(BaseModel):
+    """Resolved current operator/viewer/admin actor context."""
+
+    username: str
+    role: RbacRole
+    auth_mode: Literal["bearer", "header", "demo_default"]
+    user_id: Optional[int] = None
+
+
+class TokenResponse(BaseModel):
+    """Bearer token response for /api/v1/auth/login."""
+
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    user: UserRead
+
+
+class AuthMeResponse(BaseModel):
+    """Current authenticated or demo actor context."""
+
+    actor: ActorRead
+    user: Optional[UserRead] = None

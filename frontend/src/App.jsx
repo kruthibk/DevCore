@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import MainLayout from "./components/layout/MainLayout";
+import { AuthProvider } from "./context/AuthContext";
 import { useSystemHealth } from "./hooks/useSystemHealth";
 import { useTelemetryStream } from "./hooks/useTelemetryStream";
 import Alerts from "./pages/Alerts";
@@ -32,8 +33,8 @@ const PAGE_META = {
     subtitle: "Runbook RAG Retrieval & Grounded Investigative Triage Guidance",
   },
   "/incidents": {
-    title: "Incident Management",
-    subtitle: "Triage Registry & Operator Review (Scheduled Later Phase)",
+    title: "Incident Management & Audit Trail",
+    subtitle: "PostgreSQL Incident Lifecycle, Triage Promotion & Immutable Operator Audit Logs",
   },
   "/diagnostics": {
     title: "System Diagnostics",
@@ -48,17 +49,19 @@ export default function App() {
   const meta = PAGE_META[location.pathname] || PAGE_META["/"];
 
   return (
-    <MainLayout title={meta.title} subtitle={meta.subtitle} health={health} stream={stream}>
-      <Routes>
-        <Route path="/" element={<Overview health={health} stream={stream} />} />
-        <Route path="/telemetry" element={<Telemetry health={health} stream={stream} />} />
-        <Route path="/alerts" element={<Alerts stream={stream} />} />
-        <Route path="/fault-graph" element={<FaultGraph stream={stream} />} />
-        <Route path="/copilot" element={<AICopilot stream={stream} />} />
-        <Route path="/incidents" element={<Incidents />} />
-        <Route path="/diagnostics" element={<Diagnostics health={health} stream={stream} />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </MainLayout>
+    <AuthProvider>
+      <MainLayout title={meta.title} subtitle={meta.subtitle} health={health} stream={stream}>
+        <Routes>
+          <Route path="/" element={<Overview health={health} stream={stream} />} />
+          <Route path="/telemetry" element={<Telemetry health={health} stream={stream} />} />
+          <Route path="/alerts" element={<Alerts stream={stream} />} />
+          <Route path="/fault-graph" element={<FaultGraph stream={stream} />} />
+          <Route path="/copilot" element={<AICopilot stream={stream} />} />
+          <Route path="/incidents" element={<Incidents stream={stream} />} />
+          <Route path="/diagnostics" element={<Diagnostics health={health} stream={stream} />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </MainLayout>
+    </AuthProvider>
   );
 }

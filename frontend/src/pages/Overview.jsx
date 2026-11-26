@@ -1,4 +1,6 @@
+import { useEffect, useState } from "react";
 import { BatteryCharging, Compass, ShieldCheck, Thermometer } from "lucide-react";
+import { fetchIncidents } from "../api/client";
 import ErrorState from "../components/common/ErrorState";
 import LoadingState from "../components/common/LoadingState";
 import AlertSummary from "../components/dashboard/AlertSummary";
@@ -42,6 +44,38 @@ export default function Overview({ health, stream }) {
     alertSummary,
     alertsError,
   } = stream;
+
+  const [incidentOverview, setIncidentOverview] = useState({
+    counts: null,
+    items: [],
+    error: null,
+  });
+
+  useEffect(() => {
+    let active = true;
+    const loadIncidents = async () => {
+      const res = await fetchIncidents({ limit: 4 });
+      if (!active) return;
+      if (res.ok && res.data) {
+        setIncidentOverview({
+          counts: res.data.summary,
+          items: res.data.items || [],
+          error: null,
+        });
+      } else {
+        setIncidentOverview((prev) => ({
+          ...prev,
+          error: res.error || "Unable to fetch incidents",
+        }));
+      }
+    };
+    loadIncidents();
+    const interval = setInterval(loadIncidents, 15000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   const battery = latestReadings.battery_voltage;
   const temp = latestReadings.temperature;
@@ -248,7 +282,11 @@ export default function Overview({ health, stream }) {
       {/* D. Alert Summary & E. Incident Overview */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <AlertSummary summary={alertSummary} alerts={alerts} error={alertsError} />
-        <IncidentSummary />
+        <IncidentSummary
+          counts={incidentOverview.counts}
+          incidents={incidentOverview.items}
+          error={incidentOverview.error}
+        />
       </div>
 
       {/* Phase 1 Diagnostics Integration */}

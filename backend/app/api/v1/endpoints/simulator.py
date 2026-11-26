@@ -4,6 +4,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Depends
 
+from app.core.rbac import ActorContext, require_roles
 from app.schemas.telemetry import (
     FaultActionResponse,
     FaultInjectRequest,
@@ -28,6 +29,7 @@ def get_simulator_service() -> TelemetrySimulatorService:
 async def start_simulator(
     payload: Optional[SimulatorStartRequest] = Body(default=None),
     service: TelemetrySimulatorService = Depends(get_simulator_service),
+    _: ActorContext = Depends(require_roles("ADMIN")),
 ) -> SimulatorStatusResponse:
     interval = payload.interval_seconds if payload else None
     return await service.start(interval_seconds=interval)
@@ -40,6 +42,7 @@ async def start_simulator(
 )
 async def stop_simulator(
     service: TelemetrySimulatorService = Depends(get_simulator_service),
+    _: ActorContext = Depends(require_roles("ADMIN")),
 ) -> SimulatorStatusResponse:
     return await service.stop()
 
@@ -63,6 +66,7 @@ async def get_simulator_status(
 async def inject_fault(
     payload: FaultInjectRequest,
     service: TelemetrySimulatorService = Depends(get_simulator_service),
+    _: ActorContext = Depends(require_roles("ADMIN")),
 ) -> FaultActionResponse:
     return await service.inject_fault(
         fault_type=payload.fault_type,
@@ -77,5 +81,6 @@ async def inject_fault(
 )
 async def clear_faults(
     service: TelemetrySimulatorService = Depends(get_simulator_service),
+    _: ActorContext = Depends(require_roles("ADMIN")),
 ) -> FaultActionResponse:
     return await service.clear_faults()

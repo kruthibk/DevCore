@@ -150,16 +150,19 @@ class LLMClient:
         )
 
     async def _post_json(self, url: str, headers: Dict[str, str], payload: Dict[str, Any]) -> Dict[str, Any]:
-        if self._http_client is not None:
-            response = await self._http_client.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=self.settings.llm_timeout_seconds,
-            )
-        else:
-            async with httpx.AsyncClient(timeout=self.settings.llm_timeout_seconds) as client:
-                response = await client.post(url, headers=headers, json=payload)
+        try:
+            if self._http_client is not None:
+                response = await self._http_client.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=self.settings.llm_timeout_seconds,
+                )
+            else:
+                async with httpx.AsyncClient(timeout=self.settings.llm_timeout_seconds) as client:
+                    response = await client.post(url, headers=headers, json=payload)
+        except httpx.HTTPError as exc:
+            raise LLMClientError(f"LLM API request error ({exc.__class__.__name__}): {exc}") from exc
 
         if response.status_code >= 400:
             detail = ""
@@ -461,8 +464,60 @@ def gather_verified_context(
                     "suspected_subsystem": corr_row.suspected_subsystem,
                     "hypothesis": corr_row.hypothesis,
                     "related_alert_ids": corr_row.related_alert_ids,
+                    "supporting_evidence": corr_row.supporting_evidence,
+                    "contradicting_evidence": corr_row.contradicting_evidence,
                     "confidence_score": corr_row.confidence_score,
                     "status": corr_row.status,
+                }
+                if not request.alert_id and corr_row.related_alert_ids:
+                    linked_alert = db.execute(
+                        select(Alert).where(Alert.alert_id == corr_row.related_alert_ids[0])
+                    ).scalar_one_or_none()
+                    if linked_alert is not None:
+                        alert_ctx = {
+                            "alert_id": linked_alert.alert_id,
+                            "satellite_id": linked_alert.satellite_id,
+                            "sensor_name": linked_alert.sensor_name,
+                            "alert_type": linked_alert.alert_type,
+                            "severity": linked_alert.severity,
+                            "status": linked_alert.status,
+                            "title": linked_alert.title,
+                            "description": linked_alert.description,
+                            "observed_value": linked_alert.observed_value,
+                            "expected_range": linked_alert.expected_range,
+                            "z_score": linked_alert.z_score,
+                            "reason_code": linked_alert.reason_code,
+                            "last_detected_at": linked_alert.last_detected_at.isoformat(),
+                        }
+        elif alert_ctx is not None:
+            open_corrs = (
+                db.execute(
+                    select(Correlation)
+                    .where(
+                        Correlation.satellite_id == request.satellite_id,
+                        Correlation.status.in_(("ACTIVE", "ACKNOWLEDGED")),
+                    )
+                    .order_by(desc(Correlation.updated_at))
+                    .limit(20)
+                )
+                .scalars()
+                .all()
+            )
+            matching_corr = next(
+                (c for c in open_corrs if alert_ctx["alert_id"] in (c.related_alert_ids or [])),
+                None,
+            )
+            if matching_corr is not None:
+                correlation_ctx = {
+                    "correlation_id": matching_corr.correlation_id,
+                    "rule_code": matching_corr.rule_code,
+                    "suspected_subsystem": matching_corr.suspected_subsystem,
+                    "hypothesis": matching_corr.hypothesis,
+                    "related_alert_ids": matching_corr.related_alert_ids,
+                    "supporting_evidence": matching_corr.supporting_evidence,
+                    "contradicting_evidence": matching_corr.contradicting_evidence,
+                    "confidence_score": matching_corr.confidence_score,
+                    "status": matching_corr.status,
                 }
 
     return VerifiedTelemetryContext(

@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.core.rbac import ActorContext, require_roles
 from app.db.session import get_db
 from app.schemas.alerts import DetectionConfigResponse, DetectionStatusResponse
 from app.services.detection_pipeline import DetectionPipelineService, detection_pipeline
@@ -23,6 +24,7 @@ def get_detection_pipeline() -> DetectionPipelineService:
 def get_detection_status(
     db: Session = Depends(get_db),
     pipeline: DetectionPipelineService = Depends(get_detection_pipeline),
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> DetectionStatusResponse:
     return pipeline.build_status(db=db)
 
@@ -34,5 +36,6 @@ def get_detection_status(
 )
 def get_detection_config(
     pipeline: DetectionPipelineService = Depends(get_detection_pipeline),
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> DetectionConfigResponse:
     return pipeline.build_config_response()

@@ -17,7 +17,9 @@ router = APIRouter(prefix="/copilot", tags=["AI Copilot & RAG"])
     response_model=CopilotStatusResponse,
     summary="Get FAISS index health, embedding metadata, and LLM availability",
 )
-def get_copilot_status() -> CopilotStatusResponse:
+def get_copilot_status(
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
+) -> CopilotStatusResponse:
     return copilot_service.get_status()
 
 

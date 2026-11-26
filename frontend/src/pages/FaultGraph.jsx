@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import {
+  Bot,
   CheckCheck,
+  FilePlus2,
   GitBranch,
   Info,
   Network,
@@ -8,6 +10,8 @@ import {
   ShieldAlert,
   XCircle,
 } from "lucide-react";
+import { Link } from "react-router-dom";
+import { createIncident } from "../api/client";
 import EmptyState from "../components/common/EmptyState";
 import ErrorState from "../components/common/ErrorState";
 import LoadingState from "../components/common/LoadingState";
@@ -19,6 +23,13 @@ function statusVariant(status) {
   if (status === "ACTIVE") return "critical";
   if (status === "ACKNOWLEDGED") return "warning";
   return "muted";
+}
+
+function subsystemToRunbook(subsystem) {
+  if (subsystem === "EPS") return "battery_power";
+  if (subsystem === "THERMAL") return "temperature_thermal";
+  if (subsystem === "ADCS") return "attitude_adcs";
+  return "";
 }
 
 export default function FaultGraph({ stream }) {
@@ -43,6 +54,31 @@ export default function FaultGraph({ stream }) {
 
   const [selectedNode, setSelectedNode] = useState(null);
   const [selectedCorrelationId, setSelectedCorrelationId] = useState(null);
+  const [loggingIncident, setLoggingIncident] = useState(false);
+  const [createdIncident, setCreatedIncident] = useState(null);
+  const [incidentLogError, setIncidentLogError] = useState(null);
+
+  const handleLogCorrelationIncident = async (corrObj) => {
+    if (!corrObj || !canOperate) return;
+    setLoggingIncident(true);
+    setIncidentLogError(null);
+    setCreatedIncident(null);
+    const res = await createIncident({
+      title: `${corrObj.suspected_subsystem} Correlation: ${corrObj.rule_code}`.slice(0, 200),
+      summary: `${corrObj.hypothesis} (${corrObj.grouping_reason})`,
+      subsystem: subsystemToRunbook(corrObj.suspected_subsystem) || corrObj.suspected_subsystem || "GENERAL",
+      severity: "WARNING",
+      linked_alert_ids: corrObj.related_alert_ids || [],
+      linked_correlation_ids: [corrObj.correlation_id],
+      note: `Promoted from Fault Graph correlation ${corrObj.correlation_id}.`,
+    });
+    setLoggingIncident(false);
+    if (res.ok && res.data) {
+      setCreatedIncident(res.data);
+    } else {
+      setIncidentLogError(res.error || "Failed to log incident");
+    }
+  };
 
   useEffect(() => {
     if (correlations.length === 0) {
@@ -325,7 +361,8 @@ export default function FaultGraph({ stream }) {
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          disabled={corr.status !== "ACTIVE" || ackBusy || disBusy}
+                          disabled={!canOperate || corr.status !== "ACTIVE" || ackBusy || disBusy}
+                          title={!canOperate ? "OPERATOR or ADMIN role required" : "Acknowledge correlation"}
                           onClick={() => acknowledgeCorrelation(corr.correlation_id)}
                           className="px-2.5 py-1 rounded border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-[11px] font-mono disabled:opacity-35 disabled:cursor-not-allowed"
                         >
@@ -333,7 +370,8 @@ export default function FaultGraph({ stream }) {
                         </button>
                         <button
                           type="button"
-                          disabled={corr.status === "DISMISSED" || ackBusy || disBusy}
+                          disabled={!canOperate || corr.status === "DISMISSED" || ackBusy || disBusy}
+                          title={!canOperate ? "OPERATOR or ADMIN role required" : "Dismiss correlation"}
                           onClick={() => dismissCorrelation(corr.correlation_id)}
                           className="px-2.5 py-1 rounded border border-slate-600 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-mono disabled:opacity-35 disabled:cursor-not-allowed"
                         >
@@ -407,7 +445,7 @@ export default function FaultGraph({ stream }) {
                   )}
                 </div>
 
-                <div className="flex items-center gap-2 pt-1 font-mono">
+                <div className="flex flex-wrap items-center gap-2 pt-1 font-mono">
                   <button
                     type="button"
                     disabled={
@@ -415,7 +453,7 @@ export default function FaultGraph({ stream }) {
                       selectedCorrelation.status !== "ACTIVE" ||
                       pendingCorrelationAction === `ack:${selectedCorrelation.correlation_id}`
                     }
-                    title={!canOperate ? "VIEWER role is read-only" : "Acknowledge correlation hypothesis"}
+                    title={!canOperate ? "OPERATOR or ADMIN role required" : "Acknowledge correlation hypothesis"}
                     onClick={() => acknowledgeCorrelation(selectedCorrelation.correlation_id)}
                     className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded border border-amber-500/35 bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 disabled:opacity-35 disabled:cursor-not-allowed"
                   >
@@ -429,14 +467,55 @@ export default function FaultGraph({ stream }) {
                       selectedCorrelation.status === "DISMISSED" ||
                       pendingCorrelationAction === `dismiss:${selectedCorrelation.correlation_id}`
                     }
-                    title={!canOperate ? "VIEWER role is read-only" : "Dismiss correlation hypothesis"}
+                    title={!canOperate ? "OPERATOR or ADMIN role required" : "Dismiss correlation hypothesis"}
                     onClick={() => dismissCorrelation(selectedCorrelation.correlation_id)}
                     className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded border border-slate-600 bg-slate-800 hover:bg-slate-700 text-slate-200 disabled:opacity-35 disabled:cursor-not-allowed"
                   >
                     <XCircle className="w-3.5 h-3.5" />
                     <span>Dismiss</span>
                   </button>
+                  <Link
+                    to={`/copilot?correlation_id=${encodeURIComponent(
+                      selectedCorrelation.correlation_id
+                    )}&subsystem=${encodeURIComponent(
+                      subsystemToRunbook(selectedCorrelation.suspected_subsystem)
+                    )}&question=${encodeURIComponent(
+                      `Investigate ${selectedCorrelation.suspected_subsystem} correlation ${selectedCorrelation.correlation_id}: ${selectedCorrelation.hypothesis}`
+                    )}`}
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded border border-indigo-500/40 bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-100"
+                  >
+                    <Bot className="w-3.5 h-3.5" />
+                    <span>Ask AI Copilot</span>
+                  </Link>
+                  <button
+                    type="button"
+                    disabled={!canOperate || loggingIncident}
+                    title={!canOperate ? "OPERATOR or ADMIN role required" : "Log Incident from correlation"}
+                    onClick={() => handleLogCorrelationIncident(selectedCorrelation)}
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded border border-cyan-500/40 bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-100 disabled:opacity-35 disabled:cursor-not-allowed"
+                  >
+                    <FilePlus2 className="w-3.5 h-3.5" />
+                    <span>{loggingIncident ? "Logging..." : "Log Incident"}</span>
+                  </button>
                 </div>
+
+                {incidentLogError && (
+                  <div className="rounded border border-rose-500/35 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                    {incidentLogError}
+                  </div>
+                )}
+
+                {createdIncident && (
+                  <div className="rounded border border-emerald-500/35 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200 flex items-center justify-between gap-2">
+                    <span>Logged {createdIncident.incident_id}</span>
+                    <Link
+                      to={`/incidents?id=${encodeURIComponent(createdIncident.incident_id)}`}
+                      className="underline font-semibold text-cyan-300"
+                    >
+                      Open Incident →
+                    </Link>
+                  </div>
+                )}
               </div>
             )}
           </div>

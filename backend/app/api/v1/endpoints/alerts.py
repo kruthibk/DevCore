@@ -40,6 +40,7 @@ def list_alerts(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> AlertListResponse:
     items, total, summary = AlertService.list_alerts(
         db=db,
@@ -68,6 +69,7 @@ def list_alerts(
 def get_alert(
     alert_id: str,
     db: Session = Depends(get_db),
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> AlertRead:
     return AlertService.get_alert_by_id(db=db, alert_id=alert_id)
 

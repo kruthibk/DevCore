@@ -1,4 +1,4 @@
-"""FastAPI RBAC dependencies supporting Bearer tokens, demo role headers, and default OPERATOR mode."""
+"""FastAPI JWT authentication and role-based access control dependencies."""
 
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -10,93 +10,97 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.security import RbacRole, decode_access_token, normalize_role
 from app.db.session import get_db
+from app.models.token_revocation import RevokedToken
 from app.models.user import User
 
 
 @dataclass(frozen=True)
 class ActorContext:
-    """Authenticated or demo operator context attached to an API request."""
+    """Authenticated user context resolved from a verified JWT."""
 
     username: str
     role: RbacRole
-    auth_mode: str  # "bearer" | "header" | "demo_default"
-    user_id: Optional[int] = None
+    auth_mode: str  # "bearer"
+    user_id: int
+    jti: str
+    token_exp: int
 
 
 def get_current_actor(
     request: Request,
     db: Session = Depends(get_db),
 ) -> ActorContext:
-    """Resolve current actor from Bearer token, X-Operator-Role header, or OPERATOR demo default."""
+    """Strictly verify Bearer JWT, check token revocation, and load active User from DB."""
     auth_header = (request.headers.get("Authorization") or "").strip()
-    if auth_header.lower().startswith("bearer "):
-        token = auth_header[7:].strip()
-        settings = get_settings()
-        try:
-            payload = decode_access_token(token, settings.jwt_secret_key)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Invalid authentication token: {exc}",
-            ) from exc
-
-        username = str(payload["sub"])
-        token_role = normalize_role(str(payload.get("role", ""))) or "OPERATOR"
-        uid = payload.get("uid")
-
-        try:
-            user_row = db.execute(select(User).where(User.username == username)).scalar_one_or_none()
-            if user_row is not None:
-                if not user_row.is_active:
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="User account is inactive.",
-                    )
-                resolved_role = normalize_role(user_row.role) or token_role
-                return ActorContext(
-                    username=user_row.username,
-                    role=resolved_role,
-                    auth_mode="bearer",
-                    user_id=user_row.id,
-                )
-        except HTTPException:
-            raise
-        except Exception:  # noqa: BLE001
-            pass
-
-        return ActorContext(
-            username=username,
-            role=token_role,
-            auth_mode="bearer",
-            user_id=int(uid) if isinstance(uid, int) else None,
+    if not auth_header.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required. Provide a valid Bearer JWT.",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
-    role_header = request.headers.get("X-Operator-Role")
-    if role_header and role_header.strip():
-        normalized = normalize_role(role_header)
-        if normalized is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Unsupported operator role '{role_header.strip()}'.",
-            )
-        name_header = (request.headers.get("X-Operator-Name") or "").strip()
-        return ActorContext(
-            username=name_header or f"demo-{normalized.lower()}",
-            role=normalized,
-            auth_mode="header",
-            user_id=None,
+    token = auth_header[7:].strip()
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication token is empty.",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
+    settings = get_settings()
+    try:
+        payload = decode_access_token(
+            token,
+            secret_key=settings.jwt_secret_key,
+            algorithm=settings.jwt_algorithm,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid authentication token: {exc}",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    jti = str(payload["jti"])
+    revoked = db.execute(select(RevokedToken).where(RevokedToken.jti == jti)).scalar_one_or_none()
+    if revoked is not None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication token has been revoked.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    username = str(payload["sub"])
+    uid = payload.get("uid")
+    stmt = select(User).where(User.id == int(uid)) if isinstance(uid, int) else select(User).where(User.username == username)
+    user_row = db.execute(stmt).scalar_one_or_none()
+
+    if user_row is None or user_row.username != username:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated user record not found.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not user_row.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is inactive.",
+        )
+
+    resolved_role = normalize_role(user_row.role) or "OPERATOR"
     return ActorContext(
-        username="flight-ops-demo",
-        role="OPERATOR",
-        auth_mode="demo_default",
-        user_id=None,
+        username=user_row.username,
+        role=resolved_role,
+        auth_mode="bearer",
+        user_id=user_row.id,
+        jti=jti,
+        token_exp=int(payload["exp"]),
     )
 
 
 def require_roles(*allowed_roles: RbacRole) -> Callable[[ActorContext], ActorContext]:
-    """Enforce that the resolved actor holds one of the allowed RBAC roles."""
+    """Enforce that the authenticated actor holds one of the allowed RBAC roles."""
     allowed_set = set(allowed_roles)
 
     def _dependency(actor: ActorContext = Depends(get_current_actor)) -> ActorContext:
@@ -104,7 +108,7 @@ def require_roles(*allowed_roles: RbacRole) -> Callable[[ActorContext], ActorCon
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(
-                    f"Role '{actor.role}' is read-only or lacks permission for this action. "
+                    f"Role '{actor.role}' lacks permission for this operation. "
                     f"Required role: {' or '.join(allowed_roles)}."
                 ),
             )

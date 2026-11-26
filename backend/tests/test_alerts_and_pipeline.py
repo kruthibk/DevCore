@@ -44,8 +44,13 @@ def isolated_pipeline(tmp_path: Path):
     app.dependency_overrides[alerts_dep_pipeline] = lambda: pipeline
     app.dependency_overrides[det_dep_pipeline] = lambda: pipeline
 
+    with TestingSessionLocal() as auth_db:
+        from tests.conftest import make_test_auth_headers
+
+        auth_headers = make_test_auth_headers(auth_db, username="alerts_op", role="OPERATOR")
+
     with TestClient(app) as test_client:
-        yield test_client, pipeline, TestingSessionLocal
+        yield test_client, pipeline, TestingSessionLocal, auth_headers
 
     app.dependency_overrides.clear()
     Base.metadata.drop_all(bind=test_engine)
@@ -67,7 +72,7 @@ def test_alert_persistence_deduplication_occurrence_and_lifecycle(
     isolated_pipeline,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client, pipeline, _ = isolated_pipeline
+    client, pipeline, _, auth_headers = isolated_pipeline
 
     emit_new = AsyncMock()
     emit_updated = AsyncMock()
@@ -108,7 +113,11 @@ def test_alert_persistence_deduplication_occurrence_and_lifecycle(
     assert emit_updated.await_count == 1
 
     # 3. Verify GET /api/v1/alerts filtering and pagination
-    list_res = client.get("/api/v1/alerts", params={"alert_type": "SENSOR_MISSING", "limit": 10, "offset": 0})
+    list_res = client.get(
+        "/api/v1/alerts",
+        params={"alert_type": "SENSOR_MISSING", "limit": 10, "offset": 0},
+        headers=auth_headers,
+    )
     assert list_res.status_code == 200
     list_json = list_res.json()
     assert list_json["total"] == 1
@@ -116,33 +125,33 @@ def test_alert_persistence_deduplication_occurrence_and_lifecycle(
     assert list_json["items"][0]["occurrence_count"] == 2
 
     # 4. Verify GET /api/v1/alerts/{alert_id}
-    detail_res = client.get(f"/api/v1/alerts/{alert_id}")
+    detail_res = client.get(f"/api/v1/alerts/{alert_id}", headers=auth_headers)
     assert detail_res.status_code == 200
     assert detail_res.json()["reason_code"] == "SENSOR_VALUE_MISSING"
 
     # 5. Acknowledge action
-    ack_res = client.post(f"/api/v1/alerts/{alert_id}/acknowledge")
+    ack_res = client.post(f"/api/v1/alerts/{alert_id}/acknowledge", headers=auth_headers)
     assert ack_res.status_code == 200
     assert ack_res.json()["status"] == "ACKNOWLEDGED"
     assert ack_res.json()["acknowledged_at"] is not None
 
     # 6. Resolve action
-    resolve_res = client.post(f"/api/v1/alerts/{alert_id}/resolve")
+    resolve_res = client.post(f"/api/v1/alerts/{alert_id}/resolve", headers=auth_headers)
     assert resolve_res.status_code == 200
     assert resolve_res.json()["status"] == "RESOLVED"
     assert resolve_res.json()["resolved_at"] is not None
 
     # Cannot re-acknowledge a resolved alert
-    bad_ack = client.post(f"/api/v1/alerts/{alert_id}/acknowledge")
+    bad_ack = client.post(f"/api/v1/alerts/{alert_id}/acknowledge", headers=auth_headers)
     assert bad_ack.status_code == 409
 
     # 7. Verify detection status & config endpoints
-    det_status = client.get("/api/v1/detection/status")
+    det_status = client.get("/api/v1/detection/status", headers=auth_headers)
     assert det_status.status_code == 200
     assert det_status.json()["processed_sample_count"] == 2
     assert det_status.json()["active_alert_count"] == 0
 
-    det_cfg = client.get("/api/v1/detection/config")
+    det_cfg = client.get("/api/v1/detection/config", headers=auth_headers)
     assert det_cfg.status_code == 200
     assert "battery_voltage" in det_cfg.json()["sensor_limits"]
 

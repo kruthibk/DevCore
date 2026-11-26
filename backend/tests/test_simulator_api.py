@@ -45,36 +45,39 @@ def isolated_simulator(tmp_path: Path):
 
 def test_simulator_start_duplicate_prevention_and_stop(
     client: TestClient,
+    admin_headers: dict[str, str],
     isolated_simulator,
 ) -> None:
-    start_res = client.post("/api/v1/simulator/start", json={"interval_seconds": 0.5})
+    start_res = client.post("/api/v1/simulator/start", json={"interval_seconds": 0.5}, headers=admin_headers)
     assert start_res.status_code == 200
     assert start_res.json()["running"] is True
     assert start_res.json()["interval_seconds"] == 0.5
     assert start_res.json()["data_origin"] == "SYNTHETIC SIMULATION DATA"
 
     # Duplicate start must be prevented cleanly
-    dup_res = client.post("/api/v1/simulator/start")
+    dup_res = client.post("/api/v1/simulator/start", headers=admin_headers)
     assert dup_res.status_code == 409
     assert dup_res.json()["error"]["code"] == "SIMULATOR_ALREADY_RUNNING"
 
-    status_res = client.get("/api/v1/simulator/status")
+    status_res = client.get("/api/v1/simulator/status", headers=admin_headers)
     assert status_res.status_code == 200
     assert status_res.json()["running"] is True
 
-    stop_res = client.post("/api/v1/simulator/stop")
+    stop_res = client.post("/api/v1/simulator/stop", headers=admin_headers)
     assert stop_res.status_code == 200
     assert stop_res.json()["running"] is False
 
 
 def test_fault_injection_validation_and_clear_endpoints(
     client: TestClient,
+    admin_headers: dict[str, str],
     isolated_simulator,
 ) -> None:
     # Invalid fault scenario rejected
     invalid_res = client.post(
         "/api/v1/simulator/faults",
         json={"fault_type": "solar_flare_fake"},
+        headers=admin_headers,
     )
     assert invalid_res.status_code == 422
 
@@ -82,6 +85,7 @@ def test_fault_injection_validation_and_clear_endpoints(
     ok_res = client.post(
         "/api/v1/simulator/faults",
         json={"fault_type": "frozen_sensor", "target_sensor": "roll"},
+        headers=admin_headers,
     )
     assert ok_res.status_code == 200
     body = ok_res.json()
@@ -90,7 +94,7 @@ def test_fault_injection_validation_and_clear_endpoints(
     assert body["active_faults"][0]["target_sensor"] == "roll"
 
     # Clear faults
-    clear_res = client.post("/api/v1/simulator/faults/clear")
+    clear_res = client.post("/api/v1/simulator/faults/clear", headers=admin_headers)
     assert clear_res.status_code == 200
     assert clear_res.json()["action"] == "cleared"
     assert clear_res.json()["active_faults"] == []
@@ -104,6 +108,7 @@ def test_telemetry_persistence_latest_and_history_filters(
 
     # Override get_db to point at the same SQLite DB as isolated_simulator
     from app.db.session import get_db
+    from tests.conftest import make_test_auth_headers
 
     def override_db():
         db: Session = session_factory()
@@ -112,17 +117,20 @@ def test_telemetry_persistence_latest_and_history_filters(
         finally:
             db.close()
 
+    with session_factory() as auth_db:
+        headers = make_test_auth_headers(auth_db, username="sim_op", role="OPERATOR")
+
     app.dependency_overrides[get_db] = override_db
     try:
         asyncio.run(service.step_once())
         asyncio.run(service.step_once())
 
-        status_data = client.get("/api/v1/simulator/status").json()
+        status_data = client.get("/api/v1/simulator/status", headers=headers).json()
         assert status_data["generated_count"] == 10
         assert status_data["streamed_count"] == 10
         assert status_data["persisted_count"] == 10
 
-        latest_res = client.get("/api/v1/telemetry/latest")
+        latest_res = client.get("/api/v1/telemetry/latest", headers=headers)
         assert latest_res.status_code == 200
         latest_json = latest_res.json()
         assert latest_json["data_origin"] == "SYNTHETIC SIMULATION DATA"
@@ -138,6 +146,7 @@ def test_telemetry_persistence_latest_and_history_filters(
         hist_res = client.get(
             "/api/v1/telemetry/history",
             params={"sensor_name": "battery_voltage", "limit": 1, "offset": 0},
+            headers=headers,
         )
         assert hist_res.status_code == 200
         hist_json = hist_res.json()
@@ -150,6 +159,7 @@ def test_telemetry_persistence_latest_and_history_filters(
         empty_hist = client.get(
             "/api/v1/telemetry/history",
             params={"start_time": future_start},
+            headers=headers,
         )
         assert empty_hist.status_code == 200
         assert empty_hist.json()["total"] == 0

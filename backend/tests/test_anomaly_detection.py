@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.core.detection_config import DetectionConfig
 from app.schemas.telemetry import SENSOR_UNITS, TelemetrySampleSchema
-from app.services.anomaly_detector import StatisticalAnomalyDetector
+from app.services.anomaly_detector import StatisticalAnomalyDetector, circular_angle_delta_deg
 from app.services.telemetry_generator import TelemetryGenerator
 
 
@@ -141,3 +141,33 @@ def test_rate_of_change_and_engineering_limits_distinguished() -> None:
     detector2.evaluate_batch([_make_sample("temperature", 20.0, base_ts)])
     roc_only = detector2.evaluate_batch([_make_sample("temperature", 25.0, base_ts + timedelta(seconds=1))])
     assert [f.alert_type for f in roc_only] == ["RATE_OF_CHANGE"]
+
+
+def test_circular_angle_wrapping_prevents_false_rate_or_stat_anomaly() -> None:
+    assert circular_angle_delta_deg(-179.0, 179.0) == 2.0
+    assert circular_angle_delta_deg(179.0, -179.0) == -2.0
+
+    # Configure high engineering bounds here to isolate RATE_OF_CHANGE and STATISTICAL_ANOMALY
+    cfg = DetectionConfig()
+    limits = dict(cfg.sensor_limits)
+    from dataclasses import replace
+
+    limits["yaw"] = replace(
+        limits["yaw"],
+        engineering_warning=(-180.0, 180.0),
+        engineering_critical=(-180.0, 180.0),
+    )
+    detector = StatisticalAnomalyDetector(config=replace(cfg, sensor_limits=limits))
+    base_ts = datetime(2026, 11, 26, 8, 0, 0, tzinfo=timezone.utc)
+
+    # Oscillate smoothly across the +/-180 deg discontinuity (+178..+179..-179..-178)
+    angles = [178.0, 179.0, -179.4, -178.2, 179.1, -179.2, 178.5, -178.9, 179.0, -179.0]
+    findings = []
+    for idx, angle in enumerate(angles):
+        findings.extend(
+            detector.evaluate_batch(
+                [_make_sample("yaw", angle, base_ts + timedelta(seconds=idx))]
+            )
+        )
+
+    assert not any(f.alert_type in ("RATE_OF_CHANGE", "STATISTICAL_ANOMALY") for f in findings)

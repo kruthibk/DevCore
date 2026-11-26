@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.core.rbac import ActorContext, require_roles
 from app.db.session import get_db
 from app.schemas.telemetry import (
     SensorName,
@@ -31,6 +32,7 @@ def get_latest_telemetry(
     satellite_id: str = Query(default="SAT-01", min_length=2, max_length=32),
     db: Session = Depends(get_db),
     service: TelemetrySimulatorService = Depends(get_simulator_service),
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> TelemetryLatestResponse:
     return service.get_latest_readings(db=db, satellite_id=satellite_id)
 
@@ -49,6 +51,7 @@ def get_telemetry_history(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     service: TelemetrySimulatorService = Depends(get_simulator_service),
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> TelemetryHistoryResponse:
     items, total = service.get_history(
         db=db,

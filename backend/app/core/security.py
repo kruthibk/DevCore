@@ -1,4 +1,4 @@
-"""Security helpers for password hashing, role normalization, and HMAC session tokens."""
+"""Security helpers for password hashing, role normalization, and HMAC-SHA256 JWT tokens."""
 
 import base64
 import hashlib
@@ -6,6 +6,7 @@ import hmac
 import json
 import time
 from typing import Any, Dict, Literal, Optional
+from uuid import uuid4
 
 import bcrypt
 
@@ -20,7 +21,7 @@ _ROLE_MAP: Dict[str, RbacRole] = {
 
 
 def normalize_role(raw_role: Optional[str]) -> Optional[RbacRole]:
-    """Normalize stored or header role strings into ADMIN, OPERATOR, or VIEWER."""
+    """Normalize stored role strings into ADMIN, OPERATOR, or VIEWER."""
     if not raw_role or not raw_role.strip():
         return None
     return _ROLE_MAP.get(raw_role.strip().lower())
@@ -56,15 +57,21 @@ def create_access_token(
     role: str,
     secret_key: str,
     user_id: Optional[int] = None,
-    expires_seconds: int = 86400,
+    expires_seconds: int = 28800,
+    algorithm: str = "HS256",
 ) -> str:
-    """Create a compact HMAC-SHA256 signed JWT-style bearer token."""
+    """Create an HMAC-SHA256 signed JWT bearer token with unique jti and expiration."""
+    if algorithm.upper() != "HS256":
+        raise ValueError(f"Unsupported JWT algorithm: {algorithm}")
     normalized = normalize_role(role) or "OPERATOR"
-    header = _b64url_encode(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode("utf-8"))
+    header = _b64url_encode(
+        json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode("utf-8")
+    )
     now = int(time.time())
     payload_dict: Dict[str, Any] = {
         "sub": subject,
         "role": normalized,
+        "jti": uuid4().hex,
         "iat": now,
         "exp": now + expires_seconds,
     }
@@ -76,12 +83,25 @@ def create_access_token(
     return f"{header}.{payload}.{sig}"
 
 
-def decode_access_token(token: str, secret_key: str) -> Dict[str, Any]:
-    """Verify HMAC-SHA256 token signature and expiration; raise ValueError if invalid."""
+def decode_access_token(
+    token: str,
+    secret_key: str,
+    algorithm: str = "HS256",
+) -> Dict[str, Any]:
+    """Verify JWT signature, header algorithm, claims, and expiration."""
+    if algorithm.upper() != "HS256":
+        raise ValueError("Unsupported JWT algorithm.")
     parts = token.strip().split(".")
     if len(parts) != 3:
         raise ValueError("Invalid token format.")
     header_b64, payload_b64, sig_b64 = parts
+    try:
+        header = json.loads(_b64url_decode(header_b64).decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("Malformed token header.") from exc
+    if not isinstance(header, dict) or header.get("alg") != "HS256":
+        raise ValueError("Unexpected JWT signing algorithm.")
+
     signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
     expected_sig = _b64url_encode(
         hmac.new(secret_key.encode("utf-8"), signing_input, hashlib.sha256).digest()
@@ -92,9 +112,9 @@ def decode_access_token(token: str, secret_key: str) -> Dict[str, Any]:
         payload = json.loads(_b64url_decode(payload_b64).decode("utf-8"))
     except Exception as exc:  # noqa: BLE001
         raise ValueError("Malformed token payload.") from exc
-    if not isinstance(payload, dict) or not payload.get("sub"):
-        raise ValueError("Token missing subject.")
+    if not isinstance(payload, dict) or not payload.get("sub") or not payload.get("jti"):
+        raise ValueError("Token missing required claims.")
     exp = payload.get("exp")
-    if isinstance(exp, (int, float)) and time.time() > float(exp):
+    if not isinstance(exp, (int, float)) or time.time() >= float(exp):
         raise ValueError("Token expired.")
     return payload

@@ -1,8 +1,6 @@
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/$/, "");
 
 export const STORAGE_KEYS = {
-  role: "sat_triage_role",
-  username: "sat_triage_username",
   token: "sat_triage_token",
 };
 
@@ -12,19 +10,10 @@ function getAuthHeaders() {
     if (token) {
       return { Authorization: `Bearer ${token}` };
     }
-    const role = localStorage.getItem(STORAGE_KEYS.role) || "OPERATOR";
-    const username =
-      localStorage.getItem(STORAGE_KEYS.username) || `demo-${role.toLowerCase()}`;
-    return {
-      "X-Operator-Role": role,
-      "X-Operator-Name": username,
-    };
   } catch {
-    return {
-      "X-Operator-Role": "OPERATOR",
-      "X-Operator-Name": "flight-ops-demo",
-    };
+    // Ignore storage read errors
   }
+  return {};
 }
 
 async function requestEndpoint(path, options = {}) {
@@ -51,6 +40,18 @@ async function requestEndpoint(path, options = {}) {
       payload = await response.json();
     } catch {
       payload = null;
+    }
+
+    if (response.status === 401 && !options.skipUnauthorizedEvent) {
+      try {
+        window.dispatchEvent(
+          new CustomEvent("sat_triage:unauthorized", {
+            detail: payload?.error?.message || payload?.detail || "Session expired or unauthorized",
+          })
+        );
+      } catch {
+        // Ignore event dispatch errors
+      }
     }
 
     const errorMessage = response.ok
@@ -260,10 +261,26 @@ export function askCopilot(payload) {
   });
 }
 
+export function registerUser(username, email, password) {
+  return requestEndpoint("/api/v1/auth/register", {
+    method: "POST",
+    body: { username, email, password },
+    skipUnauthorizedEvent: true,
+  });
+}
+
 export function loginUser(username, password) {
   return requestEndpoint("/api/v1/auth/login", {
     method: "POST",
     body: { username, password },
+    skipUnauthorizedEvent: true,
+  });
+}
+
+export function logoutUser() {
+  return requestEndpoint("/api/v1/auth/logout", {
+    method: "POST",
+    skipUnauthorizedEvent: true,
   });
 }
 
@@ -271,8 +288,82 @@ export function fetchAuthMe() {
   return requestEndpoint("/api/v1/auth/me");
 }
 
-export function fetchUsers() {
-  return requestEndpoint("/api/v1/users");
+export function evaluateVerification(payload) {
+  return requestEndpoint("/api/v1/verification/evaluate", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function fetchRecommendations({ status = null, limit = 50, offset = 0 } = {}) {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (status) params.set("status", status);
+  return requestEndpoint(`/api/v1/verification/recommendations?${params.toString()}`);
+}
+
+export function fetchRecommendationDetail(recommendationId) {
+  return requestEndpoint(
+    `/api/v1/verification/recommendations/${encodeURIComponent(recommendationId)}`
+  );
+}
+
+export function approveRecommendation(recommendationId, notes = null) {
+  return requestEndpoint(
+    `/api/v1/decisions/${encodeURIComponent(recommendationId)}/approve`,
+    {
+      method: "POST",
+      body: { notes },
+    }
+  );
+}
+
+export function rejectRecommendation(recommendationId, reason, notes = null) {
+  return requestEndpoint(
+    `/api/v1/decisions/${encodeURIComponent(recommendationId)}/reject`,
+    {
+      method: "POST",
+      body: { reason, notes },
+    }
+  );
+}
+
+export function requestInvestigation(recommendationId, reason, notes = null) {
+  return requestEndpoint(
+    `/api/v1/decisions/${encodeURIComponent(recommendationId)}/request-investigation`,
+    {
+      method: "POST",
+      body: { reason, notes },
+    }
+  );
+}
+
+export function fetchDecisionHistory({ limit = 50, offset = 0 } = {}) {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  return requestEndpoint(`/api/v1/decisions/history?${params.toString()}`);
+}
+
+export function fetchAdminUsers() {
+  return requestEndpoint("/api/v1/admin/users");
+}
+
+export function updateAdminUserRole(userId, role) {
+  return requestEndpoint(`/api/v1/admin/users/${encodeURIComponent(userId)}/role`, {
+    method: "PATCH",
+    body: { role },
+  });
+}
+
+export function updateAdminUserStatus(userId, isActive) {
+  return requestEndpoint(`/api/v1/admin/users/${encodeURIComponent(userId)}/status`, {
+    method: "PATCH",
+    body: { is_active: isActive },
+  });
 }
 
 export function fetchIncidents({

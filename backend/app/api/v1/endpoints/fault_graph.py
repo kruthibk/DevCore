@@ -34,6 +34,7 @@ def get_fault_graph(
         le=86400.0,
     ),
     db: Session = Depends(get_db),
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> FaultGraphResponse:
     return CorrelationService.build_fault_graph(
         db=db,
@@ -55,6 +56,7 @@ def list_correlations(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> CorrelationListResponse:
     items, total, summary = CorrelationService.list_correlations(
         db=db,
@@ -82,6 +84,7 @@ def list_correlations(
 def get_correlation(
     correlation_id: str,
     db: Session = Depends(get_db),
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> CorrelationDetailResponse:
     return CorrelationService.get_correlation_detail(db=db, correlation_id=correlation_id)
 

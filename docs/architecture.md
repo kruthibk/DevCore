@@ -1,16 +1,17 @@
-# SAT-TRIAGE Architecture (Phases 1–6)
+# SAT-TRIAGE System Architecture
 
 ## Overview
 
-SAT-TRIAGE is a full-stack web platform for satellite telemetry anomaly triage, built for **AVISHKAR'26** (Problem Statement 11) by **Team DevCore (`AV26-BF34B6F9D2`)**.
+SAT-TRIAGE is a full-stack satellite telemetry anomaly triage copilot built for **AVISHKAR'26** (Problem Statement 11) by **Team DevCore (`AV26-BF34B6F9D2`)**.
 
-- **Phase 1:** Project foundation, FastAPI service, PostgreSQL via Docker Compose, `User` ORM model, health probes.
-- **Phase 2:** Ground-station Mission Control UI shell with Overview, Telemetry, Alerts, Incidents, and System Diagnostics pages.
-- **Phase 3:** Backend-driven NumPy synthetic telemetry simulator (`SAT-01`), fault-injection scenarios, Socket.IO real-time streaming, and bounded batch PostgreSQL persistence.
-- **Phase 4:** Statistical anomaly detection (NumPy, Pandas, SciPy), cross-signal sensor integrity verification, deduplicated persistent alerts, and live Socket.IO alert streaming.
-- **Phase 5:** Configurable satellite subsystem dependency graph (`EPS`, `THERMAL`, `ADCS`, `OBC`, `SENSORS`), time-window alert correlation, deterministic rule-based hybrid causal hypothesis engine, persistent `correlations` storage, live graph/correlation Socket.IO events, and interactive `/fault-graph` Mission Control view.
-- **Phase 6:** Evidence-linked RAG runbook knowledge base (`ATT-RB-001`, `THM-RB-001`, `BAT-RB-001`), deterministic Markdown chunking, FastEmbed dense embeddings (`BAAI/bge-small-en-v1.5`), persistent FAISS similarity retrieval, grounded AI Copilot service with citation traceability and safety guardrails, `/api/v1/copilot/*` REST APIs, and interactive `/copilot` Mission Control page.
-- **RBAC & Incident Audit Trail:** PostgreSQL-backed `users` RBAC (`ADMIN`, `OPERATOR`, `VIEWER` via Bearer tokens or `X-Operator-Role` headers, defaulting unauthenticated sessions to `OPERATOR`), idempotent demo seeding, `incidents` and immutable `incident_logs` tables, `/api/v1/incidents*` REST APIs, Header Role Switcher, full `/incidents` UI, and 1-click incident promotion from `Alerts` and `AI Copilot`.
+The application operates as one connected operational workflow:
+
+```text
+Telemetry Simulation -> Ingestion & Batch Persistence -> Real-Time Socket.IO Dashboard
+-> Statistical & Integrity Detection -> Alert Persistence -> Correlation & Fault Graph
+-> Runbook FAISS Retrieval -> Evidence-Linked AI Copilot -> Deterministic Verification Wall
+-> Human Operator Decision -> Unified Incident & Audit Timeline
+```
 
 ## Component Flow
 
@@ -53,13 +54,13 @@ SAT-TRIAGE is a full-stack web platform for satellite telemetry anomaly triage, 
 
 1. **Rolling Baseline & Z-Score (`STATISTICAL_ANOMALY`):**
    - Uses a per-`(satellite_id, sensor_name)` bounded rolling window (`rolling_window_size = 30`) evaluated with `pandas.Series` mean and sample standard deviation (`ddof=1`) through a single authoritative `compute_z_score_stats()` helper shared across alerts, evidence, and UI explanations.
+   - For attitude angles (`roll`, `pitch`, `yaw`), circular statistics (`atan2(mean(sin), mean(cos))`) and shortest signed circular deltas `((target - ref + 180) % 360) - 180` prevent false `358°` wrap jumps when crossing `+179°` to `-179°`.
    - Requires `min_baseline_samples = 8` before evaluating z-scores, guards against zero/near-zero standard deviation (`min_meaningful_std`), and applies a per-sensor `min_deviation_deadband` to prevent false alerts on slow orbital sinusoidal cycles.
-   - **Baseline Contamination Safeguard:** Fault-injected samples (`quality_status != "NOMINAL"`) and numerically anomalous samples are excluded from updating the nominal rolling baseline window, ensuring fault bursts (such as temperature spikes or battery drops) never distort nominal recovery baselines. Explicit `reset_baseline()` is exposed for recalibration/tests and never invoked silently.
+   - **Baseline Contamination Safeguard:** Fault-injected samples (`quality_status != "NOMINAL"`) and numerically anomalous samples are excluded from updating the nominal rolling baseline window.
    - Records an `illustrative_two_tailed_p` via `scipy.stats.norm.sf` in `evidence` as supporting context only (not a calibrated fault probability or causal claim).
-   - *Limitations:* Univariate per-channel analysis; assumes local stationarity across the trailing 30-sample window; statistical deviations indicate unusual numerical behavior, not confirmed spacecraft failure.
 
 2. **Rate-of-Change (`RATE_OF_CHANGE`):**
-   - Computes `|Δvalue / Δt|` across consecutive valid samples and flags excursions above sensor-specific `max_rate_per_sec` limits.
+   - Computes `|Δvalue / Δt|` across consecutive valid samples (using circular `±180°` difference for `roll`, `pitch`, and `yaw`) and flags excursions above sensor-specific `max_rate_per_sec` limits.
 
 3. **Engineering Limits (`ENGINEERING_LIMIT`):**
    - Evaluates incoming values against centralized `engineering_warning` and `engineering_critical` operational bounds, explicitly distinct from statistical z-score deviations.
@@ -70,7 +71,7 @@ SAT-TRIAGE is a full-stack web platform for satellite telemetry anomaly triage, 
    - `MISSING`: null readings (excluded from statistical baselines).
    - `FROZEN`: `6` consecutive identical values within `1e-9` tolerance.
    - `INVALID`: `NaN`/`Inf`, missing/naive timestamps, or values outside `physical_valid_range`.
-   - `STALE`: evaluated only when `simulator_running=True` and elapsed time exceeds `6.0s`; when stopped, channels report `STREAM_INACTIVE`.
+   - `STALE`: evaluated periodically by `_staleness_loop()` in `TelemetrySimulatorService` when `simulator_running=True` and elapsed time exceeds `6.0s`; when stopped, channels report `STREAM_INACTIVE`.
 
 5. **Alert Deduplication, Cooldown & Lifecycle:**
    - Active/acknowledged duplicates keyed by `(satellite_id, sensor_name, alert_type)` respect `dedup_cooldown_seconds = 10.0` (bypassed only on severity escalation) and update `last_detected_at` + increment `occurrence_count` instead of creating duplicate rows.
@@ -107,10 +108,18 @@ SAT-TRIAGE is a full-stack web platform for satellite telemetry anomaly triage, 
    - If no LLM key is configured, vector retrieval still executes and returns `generation_status = "LLM_UNAVAILABLE"` with inspectable chunks rather than fabricated AI answers.
    - Post-generation guardrails strip ungrounded citations not matching retrieved `chunk_id` / `(runbook_id, section_heading)`, reject fabricated unsupported telemetry channels (`battery_current`, `battery_soc`, `angular_velocity`, `reaction_wheel_speed`, `electronics_temperature`), block autonomous spacecraft command language, enforce correlation != causation, and handle malformed LLM JSON safely (`MALFORMED_LLM_RESPONSE`).
 
-## RBAC & Incident Log Audit Trail
+## Verification Wall, Human Approval & Unified Incident Architecture
 
-1. **Role-Based Access Control (`rbac.py`, `auth.py`):**
-   - Resolves `ActorContext` from `Authorization: Bearer <token>` (HMAC-SHA256 signed token), `X-Operator-Role` / `X-Operator-Name` headers, or unauthenticated `OPERATOR` demo fallback.
-   - `VIEWER` is strictly read-only (`HTTP 403` on mutations and Copilot queries); `OPERATOR` handles alert triage, Copilot queries, and incident workflows; `ADMIN` controls simulator fault injection and FAISS reindexing.
-2. **Incident Registry & Immutable Audit Trail (`incident.py`, `incident_service.py`, `incidents.py`):**
-   - Persists `incidents` (`INC-XXXXXXXX`, `OPEN` → `INVESTIGATING` → `MITIGATED` → `CLOSED`, `linked_alert_ids`, `copilot_summary`) and chronological `incident_logs` (`CREATED`, `STATUS_CHANGE`, `NOTE_ADDED`) in PostgreSQL.
+1. **JWT Authentication & Socket.IO Handshake (`security.py`, `rbac.py`, `auth.py`, `socket_manager.py`, `token_revocation.py`):**
+   - Registration (`POST /api/v1/auth/register`) hashes passwords with `bcrypt`, enforces `OPERATOR` role assignment (ignoring privilege escalation fields), and returns an HS256 JWT signed with `JWT_SECRET_KEY` (`JWT_EXPIRE_MINUTES = 480`).
+   - Protected REST endpoints and Socket.IO `/socket.io` handshakes require a valid JWT checked against `revoked_tokens` (`POST /api/v1/auth/logout`) and `users.is_active`.
+2. **Server-Side RBAC (`OPERATOR`, `ADMIN`, `admin.py`):**
+   - `OPERATOR` accesses telemetry, alerts, correlations, Copilot queries (with automatic alert + correlation context linking), Verification Wall evaluations, human decisions, and incident logs.
+   - `ADMIN` inherits all `OPERATOR` permissions plus simulator control, FAISS reindexing, and `/api/v1/admin/users*` management (self-role-change and self-deactivation blocked with `HTTP 403`).
+3. **Deterministic Verification Wall (`verification.py`, `verification_wall.py`):**
+   - Independently evaluates `COPILOT` or `MANUAL` recommendations across 10 deterministic checks. Stores immutable `Recommendation` (`linked_incident_id`) and `Verification` rows (`VERIFIED`, `NEEDS_REVIEW`, `REJECTED`).
+4. **Human Operator Approval & Unified Incident Registry (`decisions.py`, `incident.py`, `incident_service.py`, `incidents.py`):**
+   - Separates AI output, automated Verification Wall status, and human operator decision (`APPROVED`, `REJECTED`, `INVESTIGATION_REQUESTED`), permanently enforcing `command_executed = false`.
+   - Recording a decision automatically links or creates one unified `Incident` (`linked_recommendation_id`, `linked_alert_ids`, `linked_correlation_ids`) without duplicate incidents and appends `RECOMMENDATION_LINKED`, `VERIFICATION_RECORDED`, `DECISION_RECORDED`, `STATUS_CHANGE`, and `NOTE_ADDED` rows to `incident_logs`.
+5. **Security Limitations:**
+   - Single-secret HS256 JWTs without refresh-token rotation or MFA; revoked JTIs remain in `revoked_tokens` until administrative cleanup; synthetic telemetry Socket.IO events are broadcast-only and never carry spacecraft commands.

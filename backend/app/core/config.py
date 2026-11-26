@@ -33,6 +33,8 @@ class Settings(BaseSettings):
         default="dev-only-change-before-production",
         alias="JWT_SECRET_KEY",
     )
+    jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
+    jwt_expire_minutes: int = Field(default=480, ge=1, le=10080, alias="JWT_EXPIRE_MINUTES")
     cors_origins: str = Field(
         default="http://localhost:5173,http://127.0.0.1:5173",
         alias="CORS_ORIGINS",

@@ -111,10 +111,12 @@ class FastEmbedProvider:
         model_name: str = "BAAI/bge-small-en-v1.5",
         cache_dir: Optional[Path] = None,
         dimension: int = 384,
+        threads: int = 1,
     ) -> None:
         self.model_name = model_name
         self.cache_dir = cache_dir
         self.dimension = dimension
+        self.threads = threads
         self._model: Optional[TextEmbedding] = None
         self._lock = threading.Lock()
 
@@ -122,7 +124,10 @@ class FastEmbedProvider:
         if self._model is None:
             with self._lock:
                 if self._model is None:
-                    kwargs: Dict[str, Any] = {"model_name": self.model_name}
+                    kwargs: Dict[str, Any] = {
+                        "model_name": self.model_name,
+                        "threads": self.threads,
+                    }
                     if self.cache_dir is not None:
                         self.cache_dir.mkdir(parents=True, exist_ok=True)
                         kwargs["cache_dir"] = str(self.cache_dir)

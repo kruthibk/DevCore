@@ -312,29 +312,29 @@ async def test_copilot_guards_citations_hallucinations_and_malformed_llm_outputs
     assert len(bad_res.retrieved_evidence) >= 1
 
 
-def test_copilot_api_endpoints_status_reindex_and_ask() -> None:
-    with TestClient(app) as client:
-        reindex_resp = client.post("/api/v1/copilot/reindex")
-        assert reindex_resp.status_code == 200
-        reindex_body = reindex_resp.json()
-        assert reindex_body["index_status"] == "READY"
-        assert reindex_body["document_count"] == 3
-        assert reindex_body["chunk_count"] > 20
+def test_copilot_api_endpoints_status_reindex_and_ask(client: TestClient, admin_headers: dict[str, str]) -> None:
+    reindex_resp = client.post("/api/v1/copilot/reindex", headers=admin_headers)
+    assert reindex_resp.status_code == 200
+    reindex_body = reindex_resp.json()
+    assert reindex_body["index_status"] == "READY"
+    assert reindex_body["document_count"] == 3
+    assert reindex_body["chunk_count"] > 20
 
-        status_resp = client.get("/api/v1/copilot/status")
-        assert status_resp.status_code == 200
-        assert status_resp.json()["index_available"] is True
+    status_resp = client.get("/api/v1/copilot/status", headers=admin_headers)
+    assert status_resp.status_code == 200
+    assert status_resp.json()["index_available"] is True
 
-        ask_resp = client.post(
-            "/api/v1/copilot/ask",
-            json={
-                "question": "Is a transition from +179° to -179° necessarily a large attitude change?",
-                "subsystem": "attitude_adcs",
-                "top_k": 3,
-            },
-        )
-        assert ask_resp.status_code == 200
-        ask_body = ask_resp.json()
-        assert ask_body["evidence_sufficient"] is True
-        assert ask_body["retrieved_evidence"][0]["runbook_id"] == "ATT-RB-001"
-        assert ask_body["generation_status"] in ("LLM_UNAVAILABLE", "GENERATED")
+    ask_resp = client.post(
+        "/api/v1/copilot/ask",
+        headers=admin_headers,
+        json={
+            "question": "Is a transition from +179° to -179° necessarily a large attitude change?",
+            "subsystem": "attitude_adcs",
+            "top_k": 3,
+        },
+    )
+    assert ask_resp.status_code == 200
+    ask_body = ask_resp.json()
+    assert ask_body["evidence_sufficient"] is True
+    assert ask_body["retrieved_evidence"][0]["runbook_id"] == "ATT-RB-001"
+    assert ask_body["generation_status"] in ("LLM_UNAVAILABLE", "GENERATED")

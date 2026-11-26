@@ -7,28 +7,33 @@ import {
   Cpu,
   FileCheck2,
   GitBranch,
-  History,
-  Lock,
+  KeyRound,
   Radio,
   Satellite,
-  Sliders,
+  Shield,
+  ShieldCheck,
   Terminal,
+  UserCircle2,
+  UserPlus,
+  Users,
   X,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
+import { useAuth } from "../../context/AuthContext";
 
-const PRIMARY_NAV = [
+const AUTHENTICATED_NAV = [
   { to: "/", label: "Overview", icon: Activity, end: true },
   { to: "/telemetry", label: "Telemetry", icon: Radio },
   { to: "/alerts", label: "Alerts", icon: AlertTriangle },
   { to: "/fault-graph", label: "Fault Graph", icon: GitBranch },
   { to: "/copilot", label: "AI Copilot", icon: Bot },
+  { to: "/verification", label: "Verification", icon: ShieldCheck },
   { to: "/incidents", label: "Incidents", icon: FileCheck2 },
 ];
 
-const UPCOMING_NAV = [
-  { label: "Predictive Simulator", icon: Sliders },
-  { label: "Audit History", icon: History },
+const PUBLIC_NAV = [
+  { to: "/login", label: "Sign In", icon: KeyRound },
+  { to: "/register", label: "Register", icon: UserPlus },
 ];
 
 export default function Sidebar({
@@ -38,6 +43,9 @@ export default function Sidebar({
   onCloseMobile,
   team,
 }) {
+  const { isAuthenticated, isAdmin } = useAuth();
+  const navItems = isAuthenticated ? AUTHENTICATED_NAV : PUBLIC_NAV;
+
   const sidebarContent = (isMobile = false) => (
     <div className="flex flex-col justify-between h-full bg-[#070c18] border-r border-slate-800/90">
       <div>
@@ -85,16 +93,16 @@ export default function Sidebar({
           )}
         </div>
 
-        {/* Operations Navigation */}
+        {/* Navigation */}
         <div className="px-2.5 pt-4 space-y-5 overflow-y-auto">
           <div>
             {(!collapsed || isMobile) && (
               <div className="px-2.5 pb-2 text-[10px] font-mono uppercase tracking-widest text-slate-500">
-                Mission Operations
+                {isAuthenticated ? "Mission Operations" : "Authentication"}
               </div>
             )}
             <nav className="space-y-1">
-              {PRIMARY_NAV.map((item) => {
+              {navItems.map((item) => {
                 const Icon = item.icon;
                 return (
                   <NavLink
@@ -119,64 +127,78 @@ export default function Sidebar({
             </nav>
           </div>
 
-          {/* Coming Soon Modules */}
-          <div>
-            {(!collapsed || isMobile) && (
-              <div className="px-2.5 pb-2 text-[10px] font-mono uppercase tracking-widest text-slate-600">
-                Upcoming Modules
-              </div>
-            )}
-            <div className="space-y-1">
-              {UPCOMING_NAV.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <div
-                    key={item.label}
-                    title={`${item.label} (coming soon)`}
-                    className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs text-slate-500 border border-slate-800/50 bg-slate-900/30 cursor-not-allowed ${
-                      collapsed && !isMobile ? "justify-center px-2" : ""
-                    }`}
-                  >
-                    <span className="flex items-center gap-2.5 min-w-0">
-                      <Icon className="w-3.5 h-3.5 shrink-0 text-slate-600" />
-                      {(!collapsed || isMobile) && (
-                        <span className="truncate">{item.label}</span>
-                      )}
-                    </span>
-                    {(!collapsed || isMobile) && (
-                      <span className="inline-flex items-center gap-1 text-[9px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 shrink-0">
-                        <Lock className="w-2.5 h-2.5" />
-                        Soon
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
+          {/* Role-Based Admin Section */}
+          {isAuthenticated && isAdmin && (
+            <div>
+              {(!collapsed || isMobile) && (
+                <div className="px-2.5 pb-2 text-[10px] font-mono uppercase tracking-widest text-rose-400/80">
+                  Administration
+                </div>
+              )}
+              <NavLink
+                to="/admin"
+                onClick={isMobile ? onCloseMobile : undefined}
+                title={collapsed && !isMobile ? "Admin & Users" : undefined}
+                className={({ isActive }) =>
+                  `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium border transition-colors ${
+                    isActive
+                      ? "bg-rose-500/15 text-rose-200 border-rose-500/30"
+                      : "text-slate-300 hover:text-slate-100 hover:bg-slate-800/60 border-transparent"
+                  } ${collapsed && !isMobile ? "justify-center px-2" : ""}`
+                }
+              >
+                <Users className="w-4 h-4 shrink-0 text-rose-400" />
+                {(!collapsed || isMobile) && <span>Admin &amp; Users</span>}
+              </NavLink>
             </div>
-          </div>
+          )}
 
-          {/* Phase 1 Infrastructure Diagnostics */}
+          {/* Account & Infrastructure */}
           <div>
             {(!collapsed || isMobile) && (
               <div className="px-2.5 pb-2 text-[10px] font-mono uppercase tracking-widest text-slate-500">
-                Infrastructure
+                Account &amp; System
               </div>
             )}
-            <NavLink
-              to="/diagnostics"
-              onClick={isMobile ? onCloseMobile : undefined}
-              title={collapsed && !isMobile ? "System Diagnostics" : undefined}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${
-                  isActive
-                    ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/30"
-                    : "text-slate-400 hover:text-slate-100 hover:bg-slate-800/60 border-transparent"
-                } ${collapsed && !isMobile ? "justify-center px-2" : ""}`
-              }
-            >
-              <Terminal className="w-4 h-4 shrink-0" />
-              {(!collapsed || isMobile) && <span>System Diagnostics</span>}
-            </NavLink>
+            <div className="space-y-1">
+              {isAuthenticated && (
+                <NavLink
+                  to="/profile"
+                  onClick={isMobile ? onCloseMobile : undefined}
+                  title={collapsed && !isMobile ? "Operator Profile" : undefined}
+                  className={({ isActive }) =>
+                    `flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${
+                      isActive
+                        ? "bg-cyan-500/10 text-cyan-300 border-cyan-500/30"
+                        : "text-slate-400 hover:text-slate-100 hover:bg-slate-800/60 border-transparent"
+                    } ${collapsed && !isMobile ? "justify-center px-2" : ""}`
+                  }
+                >
+                  {isAdmin ? (
+                    <Shield className="w-4 h-4 shrink-0 text-rose-400" />
+                  ) : (
+                    <UserCircle2 className="w-4 h-4 shrink-0" />
+                  )}
+                  {(!collapsed || isMobile) && <span>Profile &amp; Role</span>}
+                </NavLink>
+              )}
+
+              <NavLink
+                to="/diagnostics"
+                onClick={isMobile ? onCloseMobile : undefined}
+                title={collapsed && !isMobile ? "System Diagnostics" : undefined}
+                className={({ isActive }) =>
+                  `flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${
+                    isActive
+                      ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/30"
+                      : "text-slate-400 hover:text-slate-100 hover:bg-slate-800/60 border-transparent"
+                  } ${collapsed && !isMobile ? "justify-center px-2" : ""}`
+                }
+              >
+                <Terminal className="w-4 h-4 shrink-0" />
+                {(!collapsed || isMobile) && <span>System Diagnostics</span>}
+              </NavLink>
+            </div>
           </div>
         </div>
       </div>
@@ -190,9 +212,7 @@ export default function Sidebar({
         >
           <Cpu className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
           {(!collapsed || isMobile) && (
-            <span className="truncate">
-              {team?.name || "DevCore"} 
-            </span>
+            <span className="truncate">{team?.name || "DevCore"}</span>
           )}
         </div>
         {(!collapsed || isMobile) && (
@@ -206,7 +226,6 @@ export default function Sidebar({
 
   return (
     <>
-      {/* Desktop Fixed Sidebar */}
       <aside
         className={`hidden lg:block shrink-0 transition-all duration-200 ${
           collapsed ? "w-[72px]" : "w-64"
@@ -215,7 +234,6 @@ export default function Sidebar({
         {sidebarContent(false)}
       </aside>
 
-      {/* Mobile Drawer Sidebar */}
       {mobileOpen && (
         <div className="fixed inset-0 z-50 lg:hidden flex">
           <div

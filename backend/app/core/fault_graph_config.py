@@ -188,7 +188,7 @@ CAUSAL_RULES: List[CausalRuleDefinition] = [
             "Co-occurring attitude excursions and battery voltage drop suggest possible solar "
             "off-pointing or coupled ADCS/EPS power load disturbance."
         ),
-        required_sensors=("battery_voltage", "roll"),
+        required_sensors=("battery_voltage", "roll", "pitch", "yaw"),
         min_alerts=2,
         requires_physical_alerts=True,
     ),

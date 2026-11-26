@@ -43,6 +43,7 @@ export default function Overview({ health, stream }) {
     alerts,
     alertSummary,
     alertsError,
+    incidentVersion,
   } = stream;
 
   const [incidentOverview, setIncidentOverview] = useState({
@@ -75,7 +76,7 @@ export default function Overview({ health, stream }) {
       active = false;
       clearInterval(interval);
     };
-  }, []);
+  }, [incidentVersion]);
 
   const battery = latestReadings.battery_voltage;
   const temp = latestReadings.temperature;

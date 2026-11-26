@@ -13,9 +13,16 @@ import {
   Search,
   Send,
   ShieldAlert,
+  ShieldCheck,
 } from "lucide-react";
-import { Link } from "react-router-dom";
-import { askCopilot, createIncident, fetchCopilotStatus, reindexCopilot } from "../api/client";
+import { Link, useSearchParams } from "react-router-dom";
+import {
+  askCopilot,
+  createIncident,
+  evaluateVerification,
+  fetchCopilotStatus,
+  reindexCopilot,
+} from "../api/client";
 import EmptyState from "../components/common/EmptyState";
 import ErrorState from "../components/common/ErrorState";
 import LoadingState from "../components/common/LoadingState";
@@ -73,18 +80,37 @@ function generationStatusBadge(status) {
 export default function AICopilot({ stream }) {
   const { alerts = [], correlations = [] } = stream || {};
   const { canOperate, isAdmin, role } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [statusData, setStatusData] = useState(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState(null);
   const [reindexing, setReindexing] = useState(false);
 
-  const [question, setQuestion] = useState("");
-  const [subsystem, setSubsystem] = useState("");
+  const [question, setQuestion] = useState(() => searchParams.get("question") || "");
+  const [subsystem, setSubsystem] = useState(() => searchParams.get("subsystem") || "");
   const [anomalyId, setAnomalyId] = useState("");
-  const [selectedAlertId, setSelectedAlertId] = useState("");
-  const [selectedCorrelationId, setSelectedCorrelationId] = useState("");
+  const [selectedAlertId, setSelectedAlertId] = useState(() => searchParams.get("alert_id") || "");
+  const [selectedCorrelationId, setSelectedCorrelationId] = useState(
+    () => searchParams.get("correlation_id") || ""
+  );
+  const [linkedIncidentId, setLinkedIncidentId] = useState(
+    () => searchParams.get("incident_id") || ""
+  );
   const [topK, setTopK] = useState(5);
+
+  useEffect(() => {
+    const qAlert = searchParams.get("alert_id");
+    const qCorr = searchParams.get("correlation_id");
+    const qInc = searchParams.get("incident_id");
+    const qSub = searchParams.get("subsystem");
+    const qQuestion = searchParams.get("question");
+    if (qAlert !== null) setSelectedAlertId(qAlert);
+    if (qCorr !== null) setSelectedCorrelationId(qCorr);
+    if (qInc !== null) setLinkedIncidentId(qInc);
+    if (qSub !== null) setSubsystem(qSub);
+    if (qQuestion !== null) setQuestion(qQuestion);
+  }, [searchParams]);
 
   const [asking, setAsking] = useState(false);
   const [askError, setAskError] = useState(null);
@@ -93,6 +119,9 @@ export default function AICopilot({ stream }) {
   const [loggingIncident, setLoggingIncident] = useState(false);
   const [createdIncident, setCreatedIncident] = useState(null);
   const [incidentLogError, setIncidentLogError] = useState(null);
+  const [submittingWall, setSubmittingWall] = useState(false);
+  const [wallResult, setWallResult] = useState(null);
+  const [wallError, setWallError] = useState(null);
 
   const loadStatus = useCallback(async () => {
     setStatusLoading(true);
@@ -132,6 +161,10 @@ export default function AICopilot({ stream }) {
 
     setAsking(true);
     setAskError(null);
+    setWallResult(null);
+    setWallError(null);
+    setCreatedIncident(null);
+    setIncidentLogError(null);
     const res = await askCopilot({
       question: qText,
       satellite_id: "SAT-01",
@@ -173,6 +206,7 @@ export default function AICopilot({ stream }) {
     setCreatedIncident(null);
 
     const linkedAlert = responseData.verified_context?.alert;
+    const linkedCorr = responseData.verified_context?.correlation;
     const summaryText =
       responseData.answer?.anomaly_summary ||
       responseData.evidence_message ||
@@ -202,6 +236,8 @@ export default function AICopilot({ stream }) {
       subsystem: inferredSubsystem,
       severity: linkedAlert?.severity || "WARNING",
       linked_alert_ids: linkedAlert?.alert_id ? [linkedAlert.alert_id] : [],
+      linked_correlation_ids: linkedCorr?.correlation_id ? [linkedCorr.correlation_id] : [],
+      linked_recommendation_id: wallResult?.recommendation_id || null,
       copilot_summary: copilotDigest,
       note: `Promoted from AI Copilot (${responseData.generation_status}).`,
     });
@@ -209,8 +245,56 @@ export default function AICopilot({ stream }) {
     setLoggingIncident(false);
     if (res.ok && res.data) {
       setCreatedIncident(res.data);
+      setLinkedIncidentId(res.data.incident_id);
     } else {
       setIncidentLogError(res.error || "Failed to log incident");
+    }
+  };
+
+  const handleSubmitVerificationWall = async () => {
+    if (!responseData || !canOperate) return;
+    setSubmittingWall(true);
+    setWallError(null);
+    setWallResult(null);
+
+    const ans = responseData.answer || {};
+    const inferredSubsystem =
+      subsystem ||
+      responseData.retrieved_evidence?.[0]?.subsystem ||
+      "GENERAL";
+
+    const res = await evaluateVerification({
+      source_type: "COPILOT",
+      satellite_id: responseData.verified_context?.satellite_id || "SAT-01",
+      subsystem: inferredSubsystem,
+      question: responseData.question,
+      anomaly_summary:
+        ans.anomaly_summary ||
+        responseData.evidence_message ||
+        responseData.question,
+      verified_observations: ans.verified_observations || [],
+      possible_explanations: ans.possible_explanations || [],
+      supporting_evidence: ans.supporting_evidence || [],
+      contradicting_or_missing_evidence: ans.contradicting_or_missing_evidence || [],
+      recommended_checks: ans.recommended_investigative_checks || [],
+      uncertainty_and_limitations: ans.uncertainty_and_limitations || [],
+      citations: ans.citations || [],
+      retrieved_evidence: responseData.retrieved_evidence || [],
+      verified_context: responseData.verified_context || {},
+      generation_status: responseData.generation_status || "GENERATED",
+      linked_alert_id: responseData.verified_context?.alert?.alert_id || null,
+      linked_correlation_id: responseData.verified_context?.correlation?.correlation_id || null,
+      linked_incident_id: linkedIncidentId || createdIncident?.incident_id || null,
+    });
+
+    setSubmittingWall(false);
+    if (res.ok && res.data) {
+      setWallResult(res.data);
+      if (res.data.linked_incident_id) {
+        setLinkedIncidentId(res.data.linked_incident_id);
+      }
+    } else {
+      setWallError(res.error || "Failed to submit recommendation to Verification Wall");
     }
   };
 
@@ -345,6 +429,42 @@ export default function AICopilot({ stream }) {
           className="w-full rounded-lg border border-slate-700/90 bg-[#070b15] px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500/60"
         />
 
+        {/* Attached Workflow Context Banner */}
+        {(selectedAlertId || selectedCorrelationId || linkedIncidentId) && (
+          <div className="rounded border border-cyan-500/35 bg-cyan-500/10 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex flex-wrap items-center gap-2 font-mono text-cyan-100">
+              <span className="text-[10px] uppercase text-cyan-300">Attached Context:</span>
+              {selectedAlertId && (
+                <span className="px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/35 text-amber-200">
+                  Alert {selectedAlertId}
+                </span>
+              )}
+              {selectedCorrelationId && (
+                <span className="px-2 py-0.5 rounded bg-indigo-500/15 border border-indigo-500/35 text-indigo-200">
+                  Correlation {selectedCorrelationId}
+                </span>
+              )}
+              {linkedIncidentId && (
+                <span className="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/35 text-emerald-200">
+                  Incident {linkedIncidentId}
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedAlertId("");
+                setSelectedCorrelationId("");
+                setLinkedIncidentId("");
+                setSearchParams({});
+              }}
+              className="text-[11px] font-mono text-slate-300 hover:text-white underline"
+            >
+              Clear Attached Context
+            </button>
+          </div>
+        )}
+
         {/* Context & Retrieval Filters */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <div>
@@ -386,6 +506,9 @@ export default function AICopilot({ stream }) {
               className="w-full rounded border border-slate-700/90 bg-[#070b15] px-2.5 py-1.5 text-xs text-slate-200"
             >
               <option value="">Auto (Latest Open Alert)</option>
+              {selectedAlertId && !alerts.slice(0, 20).some((a) => a.alert_id === selectedAlertId) && (
+                <option value={selectedAlertId}>{selectedAlertId} (Selected)</option>
+              )}
               {alerts.slice(0, 20).map((a) => (
                 <option key={a.alert_id} value={a.alert_id}>
                   {a.alert_id} · {a.sensor_name} ({a.severity})
@@ -403,7 +526,11 @@ export default function AICopilot({ stream }) {
               onChange={(e) => setSelectedCorrelationId(e.target.value)}
               className="w-full rounded border border-slate-700/90 bg-[#070b15] px-2.5 py-1.5 text-xs text-slate-200"
             >
-              <option value="">None</option>
+              <option value="">Auto (From Alert if Matched)</option>
+              {selectedCorrelationId &&
+                !correlations.slice(0, 20).some((c) => c.correlation_id === selectedCorrelationId) && (
+                  <option value={selectedCorrelationId}>{selectedCorrelationId} (Selected)</option>
+                )}
               {correlations.slice(0, 20).map((c) => (
                 <option key={c.correlation_id} value={c.correlation_id}>
                   {c.correlation_id} · {c.suspected_subsystem} ({c.status})
@@ -439,7 +566,7 @@ export default function AICopilot({ stream }) {
                 key={preset.label}
                 type="button"
                 disabled={!canOperate || asking}
-                title={!canOperate ? "VIEWER role is read-only" : undefined}
+                title={!canOperate ? "OPERATOR or ADMIN role required" : undefined}
                 onClick={() => handleSuggestedClick(preset)}
                 className="text-left text-xs px-2.5 py-1 rounded border border-slate-700/80 bg-[#0b1224] hover:border-cyan-500/40 hover:text-cyan-200 text-slate-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
@@ -455,12 +582,12 @@ export default function AICopilot({ stream }) {
           </div>
           <div className="flex items-center gap-2">
             {!canOperate && (
-              <StatusBadge variant="warning" label="VIEWER (READ-ONLY)" />
+              <StatusBadge variant="warning" label="OPERATOR / ADMIN REQUIRED" />
             )}
             <button
               type="submit"
               disabled={!canOperate || asking}
-              title={!canOperate ? "VIEWER role cannot invoke Copilot queries" : undefined}
+              title={!canOperate ? "OPERATOR or ADMIN role required" : undefined}
               className="inline-flex items-center gap-2 px-4 py-2 rounded bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/50 text-xs font-mono font-semibold text-cyan-100 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {asking ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
@@ -513,8 +640,18 @@ export default function AICopilot({ stream }) {
               <div className="flex items-center gap-2 flex-wrap">
                 <button
                   type="button"
+                  disabled={!canOperate || submittingWall}
+                  title={!canOperate ? "Authenticated OPERATOR or ADMIN required" : "Submit recommendation to Phase 8 Verification Wall"}
+                  onClick={handleSubmitVerificationWall}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-emerald-500/40 bg-emerald-500/15 hover:bg-emerald-500/25 text-xs font-mono text-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>{submittingWall ? "Evaluating..." : "Submit to Verification Wall"}</span>
+                </button>
+                <button
+                  type="button"
                   disabled={!canOperate || loggingIncident}
-                  title={!canOperate ? "VIEWER role is read-only" : "Log Copilot triage finding as an Incident"}
+                  title={!canOperate ? "Authenticated OPERATOR or ADMIN required" : "Log Copilot triage finding as an Incident"}
                   onClick={handleLogCopilotIncident}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-cyan-500/40 bg-cyan-500/15 hover:bg-cyan-500/25 text-xs font-mono text-cyan-100 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
@@ -526,6 +663,27 @@ export default function AICopilot({ stream }) {
                 </span>
               </div>
             </div>
+
+            {wallError && (
+              <div className="rounded border border-rose-500/35 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                {wallError}
+              </div>
+            )}
+
+            {wallResult && (
+              <div className="rounded border border-cyan-500/35 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100 flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  Verification Wall evaluated <span className="font-mono font-semibold">{wallResult.recommendation_id}</span>:{" "}
+                  <span className="font-mono font-semibold">{wallResult.latest_verification_status}</span>
+                </span>
+                <Link
+                  to={`/verification?id=${encodeURIComponent(wallResult.recommendation_id)}`}
+                  className="underline font-semibold text-cyan-300"
+                >
+                  Inspect on Verification Wall →
+                </Link>
+              </div>
+            )}
 
             {incidentLogError && (
               <div className="rounded border border-rose-500/35 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
@@ -732,6 +890,21 @@ export default function AICopilot({ stream }) {
                     </span>{" "}
                     {responseData.verified_context.alert.title} ({responseData.verified_context.alert.severity} ·{" "}
                     {responseData.verified_context.alert.status})
+                  </div>
+                )}
+                {responseData.verified_context?.correlation && (
+                  <div className="rounded border border-indigo-500/30 bg-indigo-500/5 p-3 text-xs text-slate-300 space-y-1">
+                    <div>
+                      <span className="font-mono text-indigo-300">
+                        Correlation {responseData.verified_context.correlation.correlation_id} (
+                        {responseData.verified_context.correlation.suspected_subsystem}):
+                      </span>{" "}
+                      {responseData.verified_context.correlation.hypothesis}
+                    </div>
+                    <div className="text-[10px] font-mono text-slate-400">
+                      Confidence: {Math.round((responseData.verified_context.correlation.confidence_score || 0) * 100)}% ·
+                      Rule: {responseData.verified_context.correlation.rule_code}
+                    </div>
                   </div>
                 )}
               </div>

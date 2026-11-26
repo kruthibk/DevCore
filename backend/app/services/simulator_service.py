@@ -72,6 +72,7 @@ class TelemetrySimulatorService:
 
         self._lock = asyncio.Lock()
         self._task: Optional[asyncio.Task[None]] = None
+        self._staleness_task: Optional[asyncio.Task[None]] = None
         self._stop_event = asyncio.Event()
 
         self._latest_readings: Dict[str, TelemetrySampleSchema] = {}
@@ -118,6 +119,11 @@ class TelemetrySimulatorService:
 
             self._stop_event.clear()
             self._task = asyncio.create_task(self._simulation_loop(), name="sat-triage-simulator")
+            if self._detection_service is not None:
+                self._staleness_task = asyncio.create_task(
+                    self._staleness_loop(),
+                    name="sat-triage-staleness-watchdog",
+                )
             snapshot = self.build_status()
 
         logger.info(
@@ -137,17 +143,20 @@ class TelemetrySimulatorService:
         """Stop the simulator task gracefully and flush pending samples."""
         async with self._lock:
             task = self._task
-            if task is not None and not task.done():
-                self._stop_event.set()
-                try:
-                    await asyncio.wait_for(task, timeout=5.0)
-                except asyncio.TimeoutError:
-                    task.cancel()
+            staleness_task = self._staleness_task
+            self._stop_event.set()
+            for bg_task in (task, staleness_task):
+                if bg_task is not None and not bg_task.done():
                     try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
+                        await asyncio.wait_for(bg_task, timeout=5.0)
+                    except asyncio.TimeoutError:
+                        bg_task.cancel()
+                        try:
+                            await bg_task
+                        except asyncio.CancelledError:
+                            pass
             self._task = None
+            self._staleness_task = None
             await self.flush_pending_batch()
             snapshot = self.build_status()
 
@@ -261,8 +270,12 @@ class TelemetrySimulatorService:
         except Exception as exc:
             self.failed_persist_batches += 1
             self.last_persistence_error = str(exc)
+            # Re-queue unsaved samples bounded by maxlen so transient DB blips do not lose frames
+            for item in reversed(batch):
+                if len(self._pending_batch) < (self._pending_batch.maxlen or 500):
+                    self._pending_batch.appendleft(item)
             logger.error(
-                "Telemetry batch persistence failed; records not persisted",
+                "Telemetry batch persistence failed; records queued for retry",
                 extra={"batch_size": len(batch), "error": str(exc)},
             )
             return 0
@@ -305,6 +318,32 @@ class TelemetrySimulatorService:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=self._interval_seconds)
             except asyncio.TimeoutError:
                 continue
+
+    async def _staleness_loop(self) -> None:
+        """Periodic watchdog evaluating sensor staleness while the simulator is running."""
+        check_interval = 1.5
+        if self._detection_service is not None:
+            check_interval = max(
+                0.5,
+                min(2.0, self._detection_service.config.stale_timeout_seconds / 2.0),
+            )
+        while not self._stop_event.is_set():
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=check_interval)
+                break
+            except asyncio.TimeoutError:
+                if self._detection_service is not None and self.is_running:
+                    try:
+                        await self._detection_service.evaluate_staleness_tick(
+                            simulator_running=True
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        logger.warning(
+                            "Periodic staleness check failed",
+                            extra={"error": str(exc)},
+                        )
 
     def get_latest_readings(
         self,

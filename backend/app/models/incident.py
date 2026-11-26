@@ -29,6 +29,18 @@ class Incident(Base):
     severity: Mapped[str] = mapped_column(String(16), nullable=False, default="WARNING", server_default="WARNING")
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="OPEN", server_default="OPEN")
     linked_alert_ids: Mapped[List[str]] = mapped_column(JSON, nullable=False, default=list)
+    linked_correlation_ids: Mapped[List[str]] = mapped_column(JSON, nullable=False, default=list)
+    linked_recommendation_id: Mapped[Optional[str]] = mapped_column(
+        String(40),
+        ForeignKey(
+            "recommendations.recommendation_id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_incidents_linked_recommendation",
+        ),
+        nullable=True,
+        index=True,
+    )
     copilot_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
     assigned_to: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
@@ -58,7 +70,7 @@ class IncidentLog(Base):
     __tablename__ = "incident_logs"
     __table_args__ = (
         CheckConstraint(
-            "action IN ('CREATED', 'STATUS_CHANGE', 'NOTE_ADDED')",
+            "action IN ('CREATED', 'STATUS_CHANGE', 'NOTE_ADDED', 'RECOMMENDATION_LINKED', 'VERIFICATION_RECORDED', 'DECISION_RECORDED')",
             name="ck_incident_logs_action",
         ),
     )

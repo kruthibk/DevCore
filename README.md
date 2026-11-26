@@ -13,15 +13,17 @@ Satellite ground operations teams monitor thousands of telemetry channels across
 
 ## Project Description
 
-**SAT-TRIAGE** is a full-stack satellite telemetry anomaly triage copilot designed to provide operators with a real-time mission-control workspace backed by a resilient API and relational database layer.
+**SAT-TRIAGE** is a unified, end-to-end satellite telemetry anomaly triage copilot platform backed by a FastAPI API, Socket.IO real-time streaming, FAISS/FastEmbed RAG runbook retrieval, and a PostgreSQL persistence and audit layer.
 
-- **Phase 1:** Versioned FastAPI backend, PostgreSQL via Docker Compose, structured JSON logging, centralized error handling, `User` ORM model with `bcrypt` hashing, and health diagnostics.
-- **Phase 2:** Ground-station Mission Control UI (`Overview`, `Telemetry`, `Alerts`, `Incidents`, `System Diagnostics`) with responsive layout and explicit empty states.
-- **Phase 3:** Backend NumPy synthetic telemetry generator (`SAT-01`), controllable fault-injection scenarios, `python-socketio` real-time streaming to Recharts dashboards, and bounded batch PostgreSQL persistence (`telemetry_readings`). All generated readings are explicitly marked as **SYNTHETIC SIMULATION DATA**.
-- **Phase 4:** Statistical anomaly detection (rolling baseline + z-score, rate-of-change, engineering limits using NumPy, Pandas, SciPy), independent cross-signal sensor integrity verification (`MISSING`, `FROZEN`, `INVALID`, `STALE`), deduplicated persistent alerts in PostgreSQL (`alerts`), and live Socket.IO alert/integrity streaming.
-- **Phase 5:** Configurable satellite subsystem dependency graph (`EPS`, `THERMAL`, `ADCS`, `OBC`, `SENSORS`), time-window alert correlation (`120s` default window), rule-based hybrid causal hypothesis engine with supporting/contradicting evidence and illustrative heuristic confidence, persistent `correlations` storage, and interactive `/fault-graph` operator view.
-- **Phase 6:** Evidence-linked RAG + AI Copilot backed by the three approved troubleshooting runbooks (`ATT-RB-001`, `THM-RB-001`, `BAT-RB-001`), deterministic Markdown chunking, FastEmbed (`BAAI/bge-small-en-v1.5`, 384d) embeddings, persistent FAISS `IndexFlatIP` retrieval (`backend/data/faiss/`), strict citation/hallucination/command guardrails, `/api/v1/copilot/*` endpoints, and interactive `/copilot` Mission Control page.
-- **RBAC & Incident Audit Workflow (Current):** Role-Based Access Control backed by PostgreSQL `users` (`ADMIN`, `OPERATOR`, `VIEWER`, with idempotent demo user seeding and HMAC Bearer / demo header switching) plus PostgreSQL-persisted **Incident Registry & Audit Trail** (`incidents`, `incident_logs`), full `/incidents` lifecycle page (`OPEN` → `INVESTIGATING` → `MITIGATED` → `CLOSED`), live `Overview` incident counters, and 1-click **"Log Incident"** promotion from `Alerts` and `AI Copilot`.
+- **Telemetry Simulation & Streaming:** Backend NumPy synthetic telemetry generator (`SAT-01` across `battery_voltage`, `temperature`, `roll`, `pitch`, `yaw`), controllable fault-injection scenarios (`ADMIN` only), JWT-authenticated `python-socketio` real-time streaming to Recharts dashboards, and bounded batch PostgreSQL persistence (`telemetry_readings`). All generated readings are explicitly marked as **SYNTHETIC SIMULATION DATA**.
+- **Detection & Sensor Integrity:** Numerical statistical anomaly detection (rolling baseline + z-score, circular `±180°` angle-wrapped rate-of-change and angular statistics for `roll`/`pitch`/`yaw`, engineering limits using NumPy, Pandas, SciPy), independent cross-signal sensor integrity verification (`MISSING`, `FROZEN`, `INVALID`, and scheduled background `STALE` evaluation while streaming), deduplicated persistent alerts in PostgreSQL (`alerts`), and live Socket.IO updates.
+- **Hybrid Causal Fault Graph:** Configurable satellite subsystem dependency graph (`EPS`, `THERMAL`, `ADCS`, `OBC`, `SENSORS`), time-window alert correlation (`120s` default window), deterministic rule-based causal hypothesis engine (`ADCS_EPS_SOLAR_COUPLING` matching `battery_voltage` with any of `roll`/`pitch`/`yaw`, `EPS_THERMAL_COUPLED_FAULT`, `OBC_MULTI_CHANNEL_INTEGRITY`, and subsystem clusters) with supporting/contradicting evidence, persistent `correlations` storage, and interactive `/fault-graph` operator view.
+- **Evidence-Linked RAG + AI Copilot:** Grounded in three approved troubleshooting runbooks (`ATT-RB-001`, `THM-RB-001`, `BAT-RB-001`), deterministic Markdown chunking, FastEmbed (`BAAI/bge-small-en-v1.5`, 384d) embeddings, persistent FAISS `IndexFlatIP` retrieval (`backend/data/faiss/`), strict citation/hallucination/command guardrails, automatic alert and correlation context attachment, `/api/v1/copilot/*` endpoints, and interactive `/copilot` triage page.
+- **Deterministic Verification Wall, Human Approval & Unified Incident Timeline:**
+  - **Verification Wall** (`recommendations`, `verifications`): evaluates 10 safety & grounding rules independently of the LLM (`VERIFIED`, `NEEDS_REVIEW`, `REJECTED`).
+  - **Human Operator Approval** (`operator_decisions`): records authenticated `APPROVED`, `REJECTED`, and `INVESTIGATION_REQUESTED` decisions (`command_executed=false`), automatically linking or creating a unified **Incident** (`incidents`, `incident_logs`) without duplicates.
+  - **Incident & Audit History:** `/incidents` displays linked alerts, linked correlations, linked Copilot recommendation + verification checks + operator decisions, and one chronological `incident_logs` timeline (`CREATED`, `RECOMMENDATION_LINKED`, `VERIFICATION_RECORDED`, `DECISION_RECORDED`, `STATUS_CHANGE`, `NOTE_ADDED`).
+- **Authentication & RBAC:** HS256 JWT authentication (`register`, `login`, `logout` via `revoked_tokens`, `bcrypt` hashing), JWT verification on Socket.IO `/socket.io`, strict `OPERATOR` & `ADMIN` RBAC, and `/login`, `/register`, `/profile`, `/admin` pages.
 
 ---
 
@@ -44,13 +46,13 @@ See [docs/architecture.md](docs/architecture.md) for the full system diagram, de
 
 Thresholds are centralized in [detection_config.py](backend/app/core/detection_config.py) and exposed read-only via `GET /api/v1/detection/config`:
 
-- **Rolling Baseline & Z-Score:** `rolling_window_size = 30`, `min_baseline_samples = 8`, `z_score_warning = 3.5`, `z_score_critical = 5.0` (with per-sensor `min_meaningful_std` and `min_deviation_deadband` guards, plus independent `(satellite_id, sensor_name)` baselines excluding fault/anomalous excursions).
+- **Rolling Baseline & Z-Score:** `rolling_window_size = 30`, `min_baseline_samples = 8`, `z_score_warning = 3.5`, `z_score_critical = 5.0` (with per-sensor `min_meaningful_std` and `min_deviation_deadband` guards, circular `[-180, 180)` shortest-angle deltas and circular baseline statistics for `roll`, `pitch`, and `yaw`, plus independent `(satellite_id, sensor_name)` baselines excluding fault/anomalous excursions).
 - **Deduplication & Recovery:** `dedup_cooldown_seconds = 10.0`, `recovery_consecutive_samples = 5` (auto-resolves open alerts after 5 consecutive clean nominal readings while preserving history).
 - **Sensor Integrity (`WARNING` severity):**
   - `MISSING`: null `sensor_value`
   - `FROZEN`: `6` consecutive identical finite readings
   - `INVALID`: `NaN`/`Inf`, missing/naive timestamp, or outside `physical_valid_range`
-  - `STALE`: > `6.0s` without updates while `simulator_running=True` (reports `STREAM_INACTIVE` when stopped)
+  - `STALE`: > `6.0s` without updates evaluated continuously by a background watchdog while `simulator_running=True` (reports `STREAM_INACTIVE` when stopped)
 
 | Sensor | Unit | Engineering Warning | Engineering Critical | Physical Valid Range | Max Rate (`/s`) | Deadband |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -101,10 +103,22 @@ Thresholds are centralized in [detection_config.py](backend/app/core/detection_c
 | `GET` | `/api/v1/copilot/status` | Returns FAISS index health, document/chunk counts, embedding model, and LLM availability. |
 | `POST` | `/api/v1/copilot/ask` | Runs semantic runbook retrieval and grounded investigative Copilot generation (`OPERATOR`/`ADMIN`). |
 | `POST` | `/api/v1/copilot/reindex` | Deterministically re-ingests `manifest.json` runbooks and rebuilds the FAISS index (`ADMIN` only). |
-| `POST` | `/api/v1/auth/login` | Authenticates against PostgreSQL `users` and returns a signed Bearer token. |
-| `GET` | `/api/v1/auth/me` | Returns the resolved RBAC actor (`ADMIN`, `OPERATOR`, or `VIEWER`). |
-| `GET` | `/api/v1/users` | Lists platform user metadata without exposing `password_hash`. |
-| `GET` | `/api/v1/incidents` | Lists tracked incidents and aggregate status counts. |
+| `POST` | `/api/v1/auth/register` | Registers a new `OPERATOR` account (self-elevation to `ADMIN` blocked) and issues a JWT. |
+| `POST` | `/api/v1/auth/login` | Authenticates against PostgreSQL `users` (`bcrypt`) and returns an HS256 JWT. |
+| `POST` | `/api/v1/auth/logout` | Revokes the active JWT `jti` in `revoked_tokens` (protected). |
+| `GET` | `/api/v1/auth/me` | Returns the authenticated user profile and RBAC role (protected). |
+| `POST` | `/api/v1/verification/evaluate` | Runs the deterministic 10-rule Verification Wall and persists a `Verification` record. |
+| `GET` | `/api/v1/verification/recommendations` | Lists submitted recommendations with verification and decision status filters. |
+| `GET` | `/api/v1/verification/{verification_id}` | Returns a single immutable `Verification` evaluation record. |
+| `GET` | `/api/v1/verification/recommendations/{recommendation_id}` | Returns full recommendation detail, verification history, and human decision history. |
+| `POST` | `/api/v1/decisions/{recommendation_id}/approve` | Records human operator approval (`409` if `REJECTED`; `command_executed=false`). |
+| `POST` | `/api/v1/decisions/{recommendation_id}/reject` | Rejects a recommendation with a mandatory operator reason. |
+| `POST` | `/api/v1/decisions/{recommendation_id}/request-investigation` | Requests further operator investigation with a mandatory reason. |
+| `GET` | `/api/v1/decisions/history` | Lists chronological human operator decision records. |
+| `GET` | `/api/v1/admin/users` | Lists user accounts and system-level audit counts (`ADMIN` only). |
+| `PATCH` | `/api/v1/admin/users/{user_id}/role` | Assigns a user's RBAC role (`ADMIN` only; self-modification blocked). |
+| `PATCH` | `/api/v1/admin/users/{user_id}/status` | Activates or deactivates a user account (`ADMIN` only; self-deactivation blocked). |
+| `GET` | `/api/v1/incidents` | Lists tracked incidents and aggregate status counts (`OPERATOR`/`ADMIN`). |
 | `POST` | `/api/v1/incidents` | Creates an incident and records its `CREATED` audit entry (`OPERATOR`/`ADMIN`). |
 | `GET` | `/api/v1/incidents/{incident_id}` | Returns full incident details and chronological `incident_logs`. |
 | `PATCH` | `/api/v1/incidents/{incident_id}` | Transitions status/assignee and appends a `STATUS_CHANGE` audit entry (`OPERATOR`/`ADMIN`). |
@@ -112,7 +126,9 @@ Thresholds are centralized in [detection_config.py](backend/app/core/detection_c
 
 ---
 
-## Socket.IO Event Contract (`/socket.io`)
+## Socket.IO Event Contract (`/socket.io` — JWT Authenticated)
+
+Clients must pass a valid `OPERATOR`/`ADMIN` Bearer JWT via `auth: { token }` (or `Authorization: Bearer ...` header) during handshake.
 
 - `telemetry:update`: Live synthetic telemetry frame and pipeline counters.
 - `simulation:status`: Simulator lifecycle status (`running`, `interval_seconds`, `active_faults`).
@@ -124,6 +140,7 @@ Thresholds are centralized in [detection_config.py](backend/app/core/detection_c
 - `fault_graph:update`: Live subsystem fault graph topology and correlation snapshot (`FaultGraphResponse` JSON).
 - `correlation:new`: Newly persisted correlation hypothesis (`CorrelationRead` JSON).
 - `correlation:updated`: Updated, acknowledged, or dismissed correlation hypothesis (`CorrelationRead` JSON).
+- `incident:updated`: Broadcast when an incident is created, updated, or receives an operator decision/verification log.
 
 ---
 
@@ -162,14 +179,21 @@ Troubleshooting runbooks are stored under `backend/data/runbooks/` alongside [ma
 
 ---
 
-## RBAC & Incident Log Audit Workflow
+## Verification Wall, Human Approval & Unified Incident Lifecycle
 
-- **Roles & Permissions (`users` table):**
-  - `VIEWER`: Read-only access across all dashboards; state-changing endpoints return `HTTP 403`.
-  - `OPERATOR` (default unauthenticated demo access): Acknowledge/resolve alerts, dismiss/acknowledge correlations, query `/api/v1/copilot/ask`, create/transition incidents, and append investigation notes.
-  - `ADMIN`: Full access including simulator lifecycle/fault injection (`/api/v1/simulator/*`) and FAISS reindexing (`/api/v1/copilot/reindex`).
-- **Demo Accounts (seeded idempotently on startup):** `admin` / `AdminPass!2026`, `operator` / `OperatorPass!2026`, `viewer` / `ViewerPass!2026` (plus 1-click Header Role Switcher using `X-Operator-Role` headers).
-- **Incident Lifecycle & Audit Trail (`incidents`, `incident_logs`):** Supports `OPEN` → `INVESTIGATING` → `MITIGATED` → `CLOSED` transitions, 1-click promotion from `Alerts` and `AI Copilot`, and immutable chronological `CREATED`, `STATUS_CHANGE`, and `NOTE_ADDED` logs.
+- **JWT Authentication & Token Revocation (`security.py`, `rbac.py`, `auth.py`):**
+  - Passwords are hashed using `bcrypt` with per-user salts (`hash_password` / `verify_password`) and never stored or returned in plaintext.
+  - Login and registration issue HMAC-SHA256 JWTs signed with `JWT_SECRET_KEY` (loaded from `.env`, expiring after `JWT_EXPIRE_MINUTES = 480` by default) containing `sub`, `uid`, `role`, `jti`, `iat`, and `exp`.
+  - `POST /api/v1/auth/logout` persists the token `jti` in `revoked_tokens`, immediately blocking reuse (`HTTP 401`). Inactive accounts (`is_active = false`) are blocked (`HTTP 403`).
+- **Role-Based Access Control (Enforced Server-Side):**
+  - `OPERATOR`: View telemetry/alerts/correlations/incidents, run AI Copilot queries, submit recommendations to the Verification Wall, and record human approval/rejection/investigation decisions. Public registration always assigns `OPERATOR` (self-elevation is blocked).
+  - `ADMIN`: All `OPERATOR` permissions plus simulator fault controls, FAISS reindexing, and `/api/v1/admin/users*` account/role management (self-role-change and self-deactivation blocked with `HTTP 403`).
+- **Deterministic Verification Wall (`verification_wall.py`):**
+  - Evaluates recommendations across 10 deterministic rules independent of any LLM: evidence availability, source citation validity, supported telemetry channels (5 channels only), runbook subsystem ownership, consistency with retrieved evidence, unsupported engineering thresholds, autonomous spacecraft commands, unsupported root-cause claims, missing/contradictory evidence, and human approval requirements.
+  - Produces `VERIFIED`, `NEEDS_REVIEW`, or `REJECTED`. AI responses can never self-certify as `VERIFIED`. `VERIFIED` means configured checks passed — not guaranteed real-world spacecraft safety.
+- **Human Operator Approval & Unified Incident Timeline (`decisions.py`, `incidents.py`, `incident_service.py`):**
+  - Supports **Approve**, **Reject** (reason required), and **Request Investigation** (reason required). `REJECTED` recommendations cannot be approved (`HTTP 409`). Decisions never overwrite the underlying `Verification` record, preserve full historical logs across re-evaluations, strictly enforce `command_executed = false`, and automatically link or create a unified `Incident` (`incidents`, `incident_logs`) with linked alerts, correlations, recommendation verification results, and decision events (`CREATED`, `RECOMMENDATION_LINKED`, `VERIFICATION_RECORDED`, `DECISION_RECORDED`, `STATUS_CHANGE`, `NOTE_ADDED`).
+- **Security Limitations:** Prototype uses HS256 shared-secret JWTs without refresh-token rotation or MFA; `revoked_tokens` rows are retained until manual pruning; Socket.IO handshakes require a valid `OPERATOR`/`ADMIN` JWT and never carry spacecraft commands.
 
 ---
 

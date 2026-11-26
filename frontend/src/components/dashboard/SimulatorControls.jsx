@@ -57,7 +57,7 @@ export default function SimulatorControls({ stream }) {
             />
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Backend-driven NumPy generator ({simulatorStatus?.interval_seconds ?? 1.0}s interval). Fault injections alter synthetic sensor streams; anomaly classification is deferred to Phase 4.
+            Backend-driven NumPy generator ({simulatorStatus?.interval_seconds ?? 1.0}s interval). Fault injections alter synthetic sensor streams; statistical anomaly and integrity detectors evaluate readings in real time.
           </p>
         </div>
 

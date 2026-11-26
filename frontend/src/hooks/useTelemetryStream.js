@@ -17,6 +17,7 @@ import {
   resolveAlert,
   startSimulator,
   stopSimulator,
+  STORAGE_KEYS,
 } from "../api/client";
 
 const MAX_CHART_POINTS = 60;
@@ -35,7 +36,7 @@ function toChartPoint(timestampIso, readingsMap) {
   };
 }
 
-export function useTelemetryStream() {
+export function useTelemetryStream(isAuthenticated = false, authToken = null) {
   const [socketStatus, setSocketStatus] = useState("connecting");
   const [socketError, setSocketError] = useState(null);
   const [simulatorStatus, setSimulatorStatus] = useState(null);
@@ -73,6 +74,7 @@ export function useTelemetryStream() {
   const [correlationStatusFilter, setCorrelationStatusFilter] = useState("");
   const [pendingCorrelationAction, setPendingCorrelationAction] = useState(null);
   const [correlationActionError, setCorrelationActionError] = useState(null);
+  const [incidentVersion, setIncidentVersion] = useState(0);
 
   const socketRef = useRef(null);
   const filtersRef = useRef(alertFilters);
@@ -172,10 +174,37 @@ export function useTelemetryStream() {
   }, [refreshAlerts, refreshFaultGraph]);
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      setSimulatorStatus(null);
+      setAlerts([]);
+      setCorrelations([]);
+      setFaultGraph(null);
+      setAlertsLoading(false);
+      setFaultGraphLoading(false);
+      setSocketStatus("disconnected");
+      return undefined;
+    }
+
+    let token = authToken;
+    if (!token) {
+      try {
+        token = localStorage.getItem(STORAGE_KEYS.token);
+      } catch {
+        token = null;
+      }
+    }
+    if (!token) {
+      setSocketStatus("disconnected");
+      return undefined;
+    }
+
+    setAlertsLoading(true);
+    setFaultGraphLoading(true);
     syncInitialState();
 
     const socket = io(getApiBaseUrl(), {
       path: "/socket.io",
+      auth: { token },
       transports: ["websocket", "polling"],
       reconnection: true,
       reconnectionAttempts: Infinity,
@@ -282,11 +311,15 @@ export function useTelemetryStream() {
       refreshFaultGraph();
     });
 
+    socket.on("incident:updated", () => {
+      setIncidentVersion((v) => v + 1);
+    });
+
     return () => {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [syncInitialState, refreshAlerts, refreshFaultGraph]);
+  }, [isAuthenticated, authToken, syncInitialState, refreshAlerts, refreshFaultGraph]);
 
   const updateAlertFilters = useCallback(
     (nextFilters) => {
@@ -467,5 +500,6 @@ export function useTelemetryStream() {
     clearCorrelationActionError: () => setCorrelationActionError(null),
     acknowledgeCorrelation: handleAcknowledgeCorrelation,
     dismissCorrelation: handleDismissCorrelation,
+    incidentVersion,
   };
 }

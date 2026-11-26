@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  Bot,
   ClipboardList,
   Clock,
   FileCheck2,
   FileText,
+  GitBranch,
   MessageSquarePlus,
   Plus,
   RefreshCw,
+  ShieldCheck,
   UserCheck,
   X,
 } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   addIncidentLog,
   createIncident,
@@ -49,12 +52,14 @@ function statusVariant(status) {
 }
 
 function actionVariant(action) {
-  if (action === "CREATED") return "info";
+  if (action === "CREATED" || action === "RECOMMENDATION_LINKED") return "info";
   if (action === "STATUS_CHANGE") return "warning";
+  if (action === "VERIFICATION_RECORDED" || action === "DECISION_RECORDED") return "nominal";
   return "muted";
 }
 
-export default function Incidents() {
+export default function Incidents({ stream }) {
+  const { incidentVersion } = stream || {};
   const { canOperate, role, username } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedId = searchParams.get("id");
@@ -143,6 +148,15 @@ export default function Incidents() {
   useEffect(() => {
     loadDetail(selectedId);
   }, [selectedId, loadDetail]);
+
+  useEffect(() => {
+    if (incidentVersion) {
+      loadList();
+      if (selectedId) {
+        loadDetail(selectedId);
+      }
+    }
+  }, [incidentVersion, loadList, loadDetail, selectedId]);
 
   const handleSelect = (incId) => {
     setSelectedId(incId);
@@ -251,7 +265,7 @@ export default function Incidents() {
           <button
             type="button"
             disabled={!canOperate}
-            title={!canOperate ? "VIEWER role is read-only" : "Create a new tracked incident"}
+            title={!canOperate ? "OPERATOR or ADMIN role required" : "Create a new tracked incident"}
             onClick={() => setCreateOpen(true)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-cyan-500/40 bg-cyan-500/15 hover:bg-cyan-500/25 text-xs font-mono font-semibold text-cyan-100 disabled:opacity-40 disabled:cursor-not-allowed"
           >
@@ -441,18 +455,108 @@ export default function Incidents() {
                 <div className="text-sm font-semibold text-slate-100">{detail.title}</div>
                 <p className="text-xs text-slate-300 leading-relaxed">{detail.summary}</p>
                 {detail.linked_alert_ids?.length > 0 && (
-                  <div className="pt-1 flex flex-wrap gap-1.5">
+                  <div className="pt-1 flex flex-wrap gap-1.5 items-center">
                     {detail.linked_alert_ids.map((aid) => (
-                      <span
+                      <Link
                         key={aid}
-                        className="px-2 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-[10px] font-mono text-amber-200"
+                        to={`/copilot?alert_id=${encodeURIComponent(aid)}&incident_id=${encodeURIComponent(
+                          detail.incident_id
+                        )}`}
+                        className="px-2 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-[10px] font-mono text-amber-200"
+                        title="Investigate linked alert with AI Copilot"
                       >
-                        {aid}
-                      </span>
+                        Alert: {aid} →
+                      </Link>
+                    ))}
+                  </div>
+                )}
+                {detail.linked_correlation_ids?.length > 0 && (
+                  <div className="pt-1 flex flex-wrap gap-1.5 items-center">
+                    {detail.linked_correlation_ids.map((cid) => (
+                      <Link
+                        key={cid}
+                        to={`/copilot?correlation_id=${encodeURIComponent(
+                          cid
+                        )}&incident_id=${encodeURIComponent(detail.incident_id)}`}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-indigo-500/35 bg-indigo-500/15 hover:bg-indigo-500/25 text-[10px] font-mono text-indigo-200"
+                      >
+                        <GitBranch className="w-3 h-3" />
+                        <span>Corr: {cid} →</span>
+                      </Link>
                     ))}
                   </div>
                 )}
               </div>
+
+              {detail.linked_recommendation && (
+                <div className="rounded border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase text-emerald-300">
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      <span>Linked Verification &amp; Decision ({detail.linked_recommendation.recommendation_id})</span>
+                    </div>
+                    <Link
+                      to={`/verification?id=${encodeURIComponent(detail.linked_recommendation.recommendation_id)}`}
+                      className="text-[11px] font-mono underline text-cyan-300 hover:text-cyan-200"
+                    >
+                      Inspect Verification Wall →
+                    </Link>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge
+                      variant={
+                        detail.linked_recommendation.latest_verification_status === "VERIFIED"
+                          ? "nominal"
+                          : detail.linked_recommendation.latest_verification_status === "NEEDS_REVIEW"
+                          ? "warning"
+                          : "critical"
+                      }
+                      label={`Verification: ${detail.linked_recommendation.latest_verification_status}`}
+                      showDot={false}
+                    />
+                    <StatusBadge
+                      variant={
+                        detail.linked_recommendation.latest_decision_status === "APPROVED"
+                          ? "nominal"
+                          : detail.linked_recommendation.latest_decision_status === "REJECTED"
+                          ? "critical"
+                          : "warning"
+                      }
+                      label={`Decision: ${
+                        detail.linked_recommendation.latest_decision_status || "AWAITING_OPERATOR"
+                      }`}
+                      showDot={false}
+                    />
+                  </div>
+                  {detail.linked_recommendation.decisions?.length > 0 && (
+                    <div className="text-[11px] text-slate-300 font-mono">
+                      Latest Sign-off: {detail.linked_recommendation.decisions.at(-1).operator_username} (
+                      {detail.linked_recommendation.decisions.at(-1).operator_role}) · Commands:{" "}
+                      {detail.linked_recommendation.decisions.at(-1).command_executed ? "EXECUTED" : "NONE (SAFE)"}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!detail.linked_recommendation && (
+                <div className="flex items-center justify-end">
+                  <Link
+                    to={`/copilot?incident_id=${encodeURIComponent(detail.incident_id)}${
+                      detail.linked_alert_ids?.[0]
+                        ? `&alert_id=${encodeURIComponent(detail.linked_alert_ids[0])}`
+                        : ""
+                    }${
+                      detail.linked_correlation_ids?.[0]
+                        ? `&correlation_id=${encodeURIComponent(detail.linked_correlation_ids[0])}`
+                        : ""
+                    }`}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-indigo-500/40 bg-indigo-500/15 hover:bg-indigo-500/25 text-[11px] font-mono text-indigo-100"
+                  >
+                    <Bot className="w-3.5 h-3.5" />
+                    <span>Launch Copilot Triage for Incident →</span>
+                  </Link>
+                </div>
+              )}
 
               {detail.copilot_summary && (
                 <div className="rounded border border-cyan-500/25 bg-cyan-500/5 p-3">
@@ -497,7 +601,7 @@ export default function Incidents() {
                         key={st}
                         type="button"
                         disabled={!canOperate || actionBusy || detail.status === st}
-                        title={!canOperate ? "VIEWER role is read-only" : `Set status to ${st}`}
+                        title={!canOperate ? "OPERATOR or ADMIN role required" : `Set status to ${st}`}
                         onClick={() => handleStatusTransition(st)}
                         className={`px-2 py-1.5 rounded border text-[10px] transition-colors disabled:cursor-not-allowed ${
                           detail.status === st
@@ -527,7 +631,7 @@ export default function Incidents() {
                     placeholder={
                       canOperate
                         ? "Record ground-station observation or triage note..."
-                        : "Switch to OPERATOR or ADMIN to add notes"
+                        : "OPERATOR or ADMIN role required to add notes"
                     }
                     className="flex-1 rounded border border-slate-700 bg-[#050913] px-2.5 py-1.5 text-xs text-slate-100 disabled:opacity-50"
                   />

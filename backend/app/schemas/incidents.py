@@ -5,9 +5,20 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.alerts import AlertRead
+from app.schemas.fault_graph import CorrelationRead
+from app.schemas.verification import RecommendationDetail
+
 IncidentSeverity = Literal["CRITICAL", "WARNING", "INFO"]
 IncidentStatus = Literal["OPEN", "INVESTIGATING", "MITIGATED", "CLOSED"]
-IncidentAction = Literal["CREATED", "STATUS_CHANGE", "NOTE_ADDED"]
+IncidentAction = Literal[
+    "CREATED",
+    "STATUS_CHANGE",
+    "NOTE_ADDED",
+    "RECOMMENDATION_LINKED",
+    "VERIFICATION_RECORDED",
+    "DECISION_RECORDED",
+]
 
 
 class IncidentCreate(BaseModel):
@@ -18,6 +29,8 @@ class IncidentCreate(BaseModel):
     subsystem: str = Field(default="GENERAL", max_length=64)
     severity: IncidentSeverity = "WARNING"
     linked_alert_ids: List[str] = Field(default_factory=list)
+    linked_correlation_ids: List[str] = Field(default_factory=list)
+    linked_recommendation_id: Optional[str] = Field(default=None, max_length=40)
     copilot_summary: Optional[str] = Field(default=None, max_length=6000)
     assigned_to: Optional[str] = Field(default=None, max_length=64)
     note: Optional[str] = Field(default=None, max_length=2000)
@@ -76,6 +89,8 @@ class IncidentRead(BaseModel):
     severity: IncidentSeverity
     status: IncidentStatus
     linked_alert_ids: List[str] = Field(default_factory=list)
+    linked_correlation_ids: List[str] = Field(default_factory=list)
+    linked_recommendation_id: Optional[str] = None
     copilot_summary: Optional[str] = None
     created_by: str
     assigned_to: Optional[str] = None
@@ -84,9 +99,12 @@ class IncidentRead(BaseModel):
 
 
 class IncidentDetail(IncidentRead):
-    """Full incident record including chronological audit logs."""
+    """Full incident record including linked artifacts and chronological audit logs."""
 
     logs: List[IncidentLogRead] = Field(default_factory=list)
+    linked_recommendation: Optional[RecommendationDetail] = None
+    linked_alerts: List[AlertRead] = Field(default_factory=list)
+    linked_correlations: List[CorrelationRead] = Field(default_factory=list)
 
 
 class IncidentListResponse(BaseModel):

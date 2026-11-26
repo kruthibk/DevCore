@@ -97,6 +97,22 @@ def test_related_alerts_are_grouped_into_causal_hypotheses() -> None:
     assert obc_corrs[0].rule_code == "OBC_MULTI_CHANNEL_INTEGRITY"
     assert obc_corrs[0].suspected_subsystem == "OBC"
 
+    # ADCS/EPS solar coupling must match pitch or yaw even without roll
+    pitch_eps_alerts = [
+        _make_alert("ALT-5", "battery_voltage", "ENGINEERING_LIMIT", "WARNING", now - timedelta(seconds=6)),
+        _make_alert("ALT-6", "pitch", "STATISTICAL_ANOMALY", "WARNING", now),
+    ]
+    adcs_eps = evaluate_correlations_for_alerts(
+        pitch_eps_alerts, satellite_id="SAT-01", window_seconds=120.0, reference_time=now
+    )
+    assert len(adcs_eps) == 1
+    assert adcs_eps[0].rule_code == "ADCS_EPS_SOLAR_COUPLING"
+    assert adcs_eps[0].suspected_subsystem == "ADCS"
+    from app.core.fault_graph_config import CAUSAL_RULES
+
+    solar_rule = next(r for r in CAUSAL_RULES if r.rule_code == "ADCS_EPS_SOLAR_COUPLING")
+    assert set(solar_rule.required_sensors) == {"battery_voltage", "roll", "pitch", "yaw"}
+
 
 def test_unrelated_and_out_of_window_alerts_are_not_grouped() -> None:
     now = datetime(2026, 11, 26, 2, 0, 0, tzinfo=timezone.utc)
@@ -158,6 +174,11 @@ def test_correlation_persistence_apis_lifecycle_and_socketio_events(
     app.dependency_overrides[alerts_dep_pipeline] = lambda: pipeline
     app.dependency_overrides[det_dep_pipeline] = lambda: pipeline
 
+    with TestingSessionLocal() as auth_db:
+        from tests.conftest import make_test_auth_headers
+
+        auth_headers = make_test_auth_headers(auth_db, username="fg_op", role="OPERATOR")
+
     try:
         with TestClient(app) as client:
             base_ts = datetime.now(timezone.utc) - timedelta(seconds=20)
@@ -190,7 +211,11 @@ def test_correlation_persistence_apis_lifecycle_and_socketio_events(
             assert emit_graph_upd.await_count >= 1
 
             # GET /api/v1/fault-graph
-            graph_res = client.get("/api/v1/fault-graph", params={"satellite_id": "SAT-01", "window_seconds": 120})
+            graph_res = client.get(
+                "/api/v1/fault-graph",
+                params={"satellite_id": "SAT-01", "window_seconds": 120},
+                headers=auth_headers,
+            )
             assert graph_res.status_code == 200
             graph_data = graph_res.json()
             assert len(graph_data["correlations"]) >= 1
@@ -200,31 +225,47 @@ def test_correlation_persistence_apis_lifecycle_and_socketio_events(
             assert {"EPS", "THERMAL", "ADCS", "OBC", "SENSORS"} == subsystems
 
             # GET /api/v1/fault-graph/correlations with time window filter
-            list_res = client.get("/api/v1/fault-graph/correlations", params={"window_seconds": 120})
+            list_res = client.get(
+                "/api/v1/fault-graph/correlations",
+                params={"window_seconds": 120},
+                headers=auth_headers,
+            )
             assert list_res.status_code == 200
             list_data = list_res.json()
             assert list_data["total"] >= 1
             corr_id = list_data["items"][0]["correlation_id"]
 
             # GET /api/v1/fault-graph/correlations/{id}
-            detail_res = client.get(f"/api/v1/fault-graph/correlations/{corr_id}")
+            detail_res = client.get(
+                f"/api/v1/fault-graph/correlations/{corr_id}",
+                headers=auth_headers,
+            )
             assert detail_res.status_code == 200
             detail_json = detail_res.json()
             assert len(detail_json["related_alerts"]) >= 2
             assert len(detail_json["supporting_evidence"]) >= 1
 
             # Acknowledge
-            ack_res = client.post(f"/api/v1/fault-graph/correlations/{corr_id}/acknowledge")
+            ack_res = client.post(
+                f"/api/v1/fault-graph/correlations/{corr_id}/acknowledge",
+                headers=auth_headers,
+            )
             assert ack_res.status_code == 200
             assert ack_res.json()["status"] == "ACKNOWLEDGED"
 
             # Dismiss
-            dis_res = client.post(f"/api/v1/fault-graph/correlations/{corr_id}/dismiss")
+            dis_res = client.post(
+                f"/api/v1/fault-graph/correlations/{corr_id}/dismiss",
+                headers=auth_headers,
+            )
             assert dis_res.status_code == 200
             assert dis_res.json()["status"] == "DISMISSED"
 
             # Dismissed -> Acknowledge rejected cleanly
-            bad_ack = client.post(f"/api/v1/fault-graph/correlations/{corr_id}/acknowledge")
+            bad_ack = client.post(
+                f"/api/v1/fault-graph/correlations/{corr_id}/acknowledge",
+                headers=auth_headers,
+            )
             assert bad_ack.status_code == 409
 
             # Emitted update events on ack/dismiss

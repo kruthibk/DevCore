@@ -6,6 +6,7 @@ from datetime import datetime
 import math
 from typing import Any, Deque, Dict, List, Literal, Optional, Sequence, Tuple
 
+import numpy as np
 import pandas as pd
 from scipy import stats
 
@@ -14,6 +15,25 @@ from app.schemas.alerts import AlertSeverity, AlertType
 from app.schemas.telemetry import TelemetrySampleSchema
 
 SensorKey = Tuple[str, str]  # (satellite_id, sensor_name)
+ANGULAR_SENSORS = ("roll", "pitch", "yaw")
+
+
+def circular_angle_delta_deg(target_deg: float, reference_deg: float) -> float:
+    """Return shortest signed angular difference in degrees within [-180, 180)."""
+    return ((float(target_deg) - float(reference_deg) + 180.0) % 360.0) - 180.0
+
+
+def _circular_mean_std_deg(values_deg: Sequence[float]) -> Tuple[float, float]:
+    """Compute circular mean (degrees) and angular sample std (degrees) for wrapped angles."""
+    radians = np.deg2rad(np.asarray(list(values_deg), dtype="float64"))
+    sin_mean = float(np.mean(np.sin(radians)))
+    cos_mean = float(np.mean(np.cos(radians)))
+    mean_deg = float(np.rad2deg(math.atan2(sin_mean, cos_mean)))
+    if len(values_deg) < 2:
+        return mean_deg, 0.0
+    diffs = np.asarray([circular_angle_delta_deg(v, mean_deg) for v in values_deg], dtype="float64")
+    std_deg = float(math.sqrt(float(np.sum(diffs ** 2)) / (len(values_deg) - 1)))
+    return mean_deg, std_deg
 
 
 @dataclass(frozen=True)
@@ -35,9 +55,11 @@ def compute_z_score_stats(
     min_baseline_samples: int,
     min_meaningful_std: float,
     min_deviation_deadband: float,
+    angular: bool = False,
 ) -> Optional[ZScoreStats]:
     """Compute baseline mean, std, and z-score atomically from one authoritative source.
 
+    When angular=True, computes circular mean/std and shortest signed angle delta [-180, 180).
     Returns None when baseline size is insufficient, std is zero/near-zero, or
     observed deviation is below the sensor noise deadband.
     """
@@ -46,14 +68,18 @@ def compute_z_score_stats(
     if not math.isfinite(observed_value):
         return None
 
-    series = pd.Series(list(baseline_values), dtype="float64")
-    baseline_mean = float(series.mean())
-    baseline_std = float(series.std(ddof=1))
+    if angular:
+        baseline_mean, baseline_std = _circular_mean_std_deg(baseline_values)
+        deviation = circular_angle_delta_deg(observed_value, baseline_mean)
+    else:
+        series = pd.Series(list(baseline_values), dtype="float64")
+        baseline_mean = float(series.mean())
+        baseline_std = float(series.std(ddof=1))
+        deviation = observed_value - baseline_mean
 
     if not math.isfinite(baseline_std) or baseline_std < min_meaningful_std:
         return None
 
-    deviation = observed_value - baseline_mean
     if abs(deviation) < min_deviation_deadband:
         return None
 
@@ -128,9 +154,15 @@ class StatisticalAnomalyDetector:
             if not window:
                 summary[key] = (0, None, None)
                 continue
-            series = pd.Series([val for _, val in window], dtype="float64")
-            mean_val = round(float(series.mean()), 4)
-            std_val = round(float(series.std(ddof=1)), 4) if len(series) >= 2 else 0.0
+            vals = [val for _, val in window]
+            if key[1] in ANGULAR_SENSORS:
+                mean_raw, std_raw = _circular_mean_std_deg(vals)
+                mean_val = round(mean_raw, 4)
+                std_val = round(std_raw, 4)
+            else:
+                series = pd.Series(vals, dtype="float64")
+                mean_val = round(float(series.mean()), 4)
+                std_val = round(float(series.std(ddof=1)), 4) if len(series) >= 2 else 0.0
             summary[key] = (len(window), mean_val, std_val)
         return summary
 
@@ -234,12 +266,18 @@ class StatisticalAnomalyDetector:
                     )
                 )
 
-            # B. Rate-of-Change Detection (uses consecutive finite samples)
+            is_angular = sensor in ANGULAR_SENSORS
+
+            # B. Rate-of-Change Detection (uses circular delta for attitude angles)
             if last_sample is not None:
                 prev_ts, prev_val = last_sample
                 dt_seconds = (sample.timestamp - prev_ts).total_seconds()
                 if dt_seconds > 0:
-                    delta = val - prev_val
+                    delta = (
+                        circular_angle_delta_deg(val, prev_val)
+                        if is_angular
+                        else (val - prev_val)
+                    )
                     rate_per_sec = abs(delta) / dt_seconds
                     if rate_per_sec > limits.max_rate_per_sec:
                         roc_severity: AlertSeverity = (
@@ -266,6 +304,7 @@ class StatisticalAnomalyDetector:
                                     "previous_value": prev_val,
                                     "observed_value": val,
                                     "delta": round(delta, 4),
+                                    "angular_wrapped": is_angular,
                                     "dt_seconds": round(dt_seconds, 4),
                                     "rate_per_sec": round(rate_per_sec, 4),
                                     "max_rate_per_sec": limits.max_rate_per_sec,
@@ -282,6 +321,7 @@ class StatisticalAnomalyDetector:
                 min_baseline_samples=self.config.min_baseline_samples,
                 min_meaningful_std=limits.min_meaningful_std,
                 min_deviation_deadband=limits.min_deviation_deadband,
+                angular=is_angular,
             )
             if z_stats is not None and abs(z_stats.z_score) >= self.config.z_score_warning:
                 z_severity: AlertSeverity = (
@@ -318,6 +358,7 @@ class StatisticalAnomalyDetector:
                             "window_samples": z_stats.window_samples,
                             "z_score": z_stats.z_score,
                             "direction": z_stats.direction,
+                            "angular_wrapped": is_angular,
                             "z_threshold_warning": self.config.z_score_warning,
                             "z_threshold_critical": self.config.z_score_critical,
                             "illustrative_two_tailed_p": z_stats.two_tailed_p,

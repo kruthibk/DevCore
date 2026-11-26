@@ -54,6 +54,7 @@ async def stop_simulator(
 )
 async def get_simulator_status(
     service: TelemetrySimulatorService = Depends(get_simulator_service),
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> SimulatorStatusResponse:
     return service.build_status()
 

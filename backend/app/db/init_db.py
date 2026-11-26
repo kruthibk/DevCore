@@ -1,26 +1,25 @@
-"""Database initialization helpers and idempotent demo user seeding."""
+"""Database initialization helpers."""
 
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.core.security import hash_password
 from app.db.base import Base
-from app.models import alert, correlation, incident, telemetry, user  # noqa: F401 - ensures ORM models register on Base.metadata
-from app.models.user import User
+from app.models import (  # noqa: F401 - ensures ORM models register on Base.metadata
+    alert,
+    correlation,
+    incident,
+    telemetry,
+    token_revocation,
+    user,
+    verification,
+)
 
 logger = get_logger(__name__)
 
-DEMO_USERS = (
-    ("admin", "admin@devcore.space", "AdminPass!2026", "ADMIN"),
-    ("operator", "operator@devcore.space", "OperatorPass!2026", "OPERATOR"),
-    ("viewer", "viewer@devcore.space", "ViewerPass!2026", "VIEWER"),
-)
 
-
-def _sync_postgres_users_schema(target_engine: Engine) -> None:
-    """Safely add is_active column and update role constraint on existing PostgreSQL users table."""
+def _sync_postgres_schema(target_engine: Engine) -> None:
+    """Safely sync additive columns and updated constraints on existing PostgreSQL tables."""
     if target_engine.dialect.name != "postgresql":
         return
     with target_engine.begin() as conn:
@@ -34,39 +33,71 @@ def _sync_postgres_users_schema(target_engine: Engine) -> None:
                 "CHECK (role IN ('ADMIN', 'OPERATOR', 'VIEWER', 'admin', 'operator', 'viewer', 'analyst'))"
             )
         )
-
-
-def seed_demo_users(db: Session) -> int:
-    """Idempotently seed demo ADMIN, OPERATOR, and VIEWER accounts if missing."""
-    created = 0
-    for username, email, raw_password, role in DEMO_USERS:
-        existing = db.execute(select(User).where(User.username == username)).scalar_one_or_none()
-        if existing is not None:
-            continue
-        db.add(
-            User(
-                username=username,
-                email=email,
-                password_hash=hash_password(raw_password),
-                role=role,
-                is_active=True,
+        conn.execute(
+            text(
+                "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS linked_correlation_ids JSON NOT NULL DEFAULT '[]'::json"
             )
         )
-        created += 1
-    if created:
-        db.commit()
-    return created
+        conn.execute(
+            text(
+                "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS linked_recommendation_id VARCHAR(40)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_incidents_linked_recommendation_id "
+                "ON incidents (linked_recommendation_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "ALTER TABLE recommendations ADD COLUMN IF NOT EXISTS linked_incident_id VARCHAR(32)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_recommendations_linked_incident_id "
+                "ON recommendations (linked_incident_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "ALTER TABLE recommendations DROP CONSTRAINT IF EXISTS ck_recommendations_source_type"
+            )
+        )
+        conn.execute(
+            text(
+                "ALTER TABLE recommendations ADD CONSTRAINT ck_recommendations_source_type "
+                "CHECK (source_type IN ('COPILOT', 'MANUAL'))"
+            )
+        )
+        conn.execute(
+            text(
+                "ALTER TABLE operator_decisions ADD COLUMN IF NOT EXISTS linked_incident_id VARCHAR(32)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_operator_decisions_linked_incident_id "
+                "ON operator_decisions (linked_incident_id)"
+            )
+        )
+        conn.execute(
+            text("ALTER TABLE incident_logs DROP CONSTRAINT IF EXISTS ck_incident_logs_action")
+        )
+        conn.execute(
+            text(
+                "ALTER TABLE incident_logs ADD CONSTRAINT ck_incident_logs_action "
+                "CHECK (action IN ('CREATED', 'STATUS_CHANGE', 'NOTE_ADDED', 'RECOMMENDATION_LINKED', 'VERIFICATION_RECORDED', 'DECISION_RECORDED'))"
+            )
+        )
 
 
 def init_db(target_engine: Engine) -> bool:
-    """Create database tables, sync legacy columns, and seed demo users if reachable."""
+    """Create database tables and sync additive PostgreSQL schema changes if reachable."""
     try:
         Base.metadata.create_all(bind=target_engine)
-        _sync_postgres_users_schema(target_engine)
-        with Session(bind=target_engine) as db:
-            seeded = seed_demo_users(db)
-            if seeded:
-                logger.info("Seeded demo RBAC users", extra={"seeded_count": seeded})
+        _sync_postgres_schema(target_engine)
         logger.info("Database schema verified successfully")
         return True
     except Exception as exc:

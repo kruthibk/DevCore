@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.rbac import ActorContext, require_roles
 from app.db.session import get_db
+from app.realtime.socket_manager import emit_incident_updated
 from app.schemas.incidents import (
     IncidentCreate,
     IncidentDetail,
@@ -33,6 +34,7 @@ def list_incidents(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> IncidentListResponse:
     items, total, summary = IncidentService.list_incidents(
         db=db,
@@ -57,12 +59,14 @@ def list_incidents(
     status_code=status.HTTP_201_CREATED,
     summary="Create an incident and record its initial CREATED audit entry",
 )
-def create_incident(
+async def create_incident(
     payload: IncidentCreate,
     db: Session = Depends(get_db),
     actor: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> IncidentDetail:
-    return IncidentService.create_incident(db=db, payload=payload, actor=actor)
+    detail = IncidentService.create_incident(db=db, payload=payload, actor=actor)
+    await emit_incident_updated({"incident_id": detail.incident_id, "status": detail.status})
+    return detail
 
 
 @router.get(
@@ -73,6 +77,7 @@ def create_incident(
 def get_incident(
     incident_id: str,
     db: Session = Depends(get_db),
+    _: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> IncidentDetail:
     return IncidentService.get_incident_detail(db=db, incident_id=incident_id)
 
@@ -82,18 +87,20 @@ def get_incident(
     response_model=IncidentDetail,
     summary="Transition incident status or assignee and record audit trail",
 )
-def update_incident(
+async def update_incident(
     incident_id: str,
     payload: IncidentUpdate,
     db: Session = Depends(get_db),
     actor: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> IncidentDetail:
-    return IncidentService.update_incident(
+    detail = IncidentService.update_incident(
         db=db,
         incident_id=incident_id,
         payload=payload,
         actor=actor,
     )
+    await emit_incident_updated({"incident_id": detail.incident_id, "status": detail.status})
+    return detail
 
 
 @router.post(
@@ -102,15 +109,17 @@ def update_incident(
     status_code=status.HTTP_201_CREATED,
     summary="Append an investigation note to an incident audit trail",
 )
-def add_incident_log(
+async def add_incident_log(
     incident_id: str,
     payload: IncidentLogCreate,
     db: Session = Depends(get_db),
     actor: ActorContext = Depends(require_roles("OPERATOR", "ADMIN")),
 ) -> IncidentDetail:
-    return IncidentService.add_log_note(
+    detail = IncidentService.add_log_note(
         db=db,
         incident_id=incident_id,
         payload=payload,
         actor=actor,
     )
+    await emit_incident_updated({"incident_id": detail.incident_id, "status": detail.status})
+    return detail

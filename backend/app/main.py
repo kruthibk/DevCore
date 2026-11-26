@@ -48,7 +48,7 @@ def create_app() -> FastAPI:
     application = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
-        description="SAT-TRIAGE — Satellite Telemetry Anomaly Triage Copilot Backend API",
+        description="SAT-TRIAGE — Satellite Telemetry Anomaly Triage Copilot Backend API (Phases 1–8)",
         docs_url="/docs",
         redoc_url="/redoc",
         lifespan=lifespan,

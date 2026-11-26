@@ -13,10 +13,47 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from app.core.config import get_settings  # noqa: E402
+from app.core.security import create_access_token, hash_password  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import get_db  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import user  # noqa: F401, E402
+from app.models.user import User  # noqa: E402
+
+
+def make_test_auth_headers(db: Session, username: str = "test_admin", role: str = "ADMIN") -> dict[str, str]:
+    """Ensure a test user exists in the given session and return a valid Bearer JWT header."""
+    from sqlalchemy import select
+
+    existing = db.execute(select(User).where(User.username == username)).scalar_one_or_none()
+    if existing is None:
+        existing = User(
+            username=username,
+            email=f"{username}@devcore.space",
+            password_hash=hash_password("TestSuitePass!2026"),
+            role=role,
+            is_active=True,
+        )
+        db.add(existing)
+        db.commit()
+        db.refresh(existing)
+
+    settings = get_settings()
+    token = create_access_token(
+        subject=existing.username,
+        role=role,
+        secret_key=settings.jwt_secret_key,
+        user_id=existing.id,
+        algorithm=settings.jwt_algorithm,
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture()
+def admin_headers(sqlite_session: Session) -> dict[str, str]:
+    """Return Bearer JWT headers for an ADMIN user in sqlite_session."""
+    return make_test_auth_headers(sqlite_session, username="test_admin", role="ADMIN")
 
 
 @pytest.fixture()

@@ -3,7 +3,8 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:800
 async function requestEndpoint(path, options = {}) {
   const started = performance.now();
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  const timeoutMs = options.timeoutMs || 8000;
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -45,7 +46,7 @@ async function requestEndpoint(path, options = {}) {
       data: null,
       error:
         err?.name === "AbortError"
-          ? "Request timed out after 8000ms"
+          ? `Request timed out after ${timeoutMs}ms`
           : err?.message || "Backend unreachable",
       checkedAt: new Date().toISOString(),
     };
@@ -210,4 +211,23 @@ export function dismissCorrelation(correlationId) {
     `/api/v1/fault-graph/correlations/${encodeURIComponent(correlationId)}/dismiss`,
     { method: "POST" }
   );
+}
+
+export function fetchCopilotStatus() {
+  return requestEndpoint("/api/v1/copilot/status");
+}
+
+export function reindexCopilot() {
+  return requestEndpoint("/api/v1/copilot/reindex", {
+    method: "POST",
+    timeoutMs: 45000,
+  });
+}
+
+export function askCopilot(payload) {
+  return requestEndpoint("/api/v1/copilot/ask", {
+    method: "POST",
+    body: payload,
+    timeoutMs: 35000,
+  });
 }

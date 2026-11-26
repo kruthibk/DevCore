@@ -35,6 +35,11 @@ logs/
 *.sqlite
 *.sqlite3
 
+# Local RAG model weights and generated FAISS indexes (rebuilt via /api/v1/copilot/reindex)
+backend/data/models/
+backend/data/faiss/
+.tmp/
+
 # OS / Editor
 .DS_Store
 Thumbs.db

@@ -1,4 +1,4 @@
-# SAT-TRIAGE Architecture (Phases 1–5)
+# SAT-TRIAGE Architecture (Phases 1–6)
 
 ## Overview
 
@@ -8,13 +8,15 @@ SAT-TRIAGE is a full-stack web platform for satellite telemetry anomaly triage, 
 - **Phase 2:** Ground-station Mission Control UI shell with Overview, Telemetry, Alerts, Incidents, and System Diagnostics pages.
 - **Phase 3:** Backend-driven NumPy synthetic telemetry simulator (`SAT-01`), fault-injection scenarios, Socket.IO real-time streaming, and bounded batch PostgreSQL persistence.
 - **Phase 4:** Statistical anomaly detection (NumPy, Pandas, SciPy), cross-signal sensor integrity verification, deduplicated persistent alerts, and live Socket.IO alert streaming.
-- **Phase 5 (Current):** Configurable satellite subsystem dependency graph (`EPS`, `THERMAL`, `ADCS`, `OBC`, `SENSORS`), time-window alert correlation, deterministic rule-based hybrid causal hypothesis engine, persistent `correlations` storage, live graph/correlation Socket.IO events, and interactive `/fault-graph` Mission Control view.
+- **Phase 5:** Configurable satellite subsystem dependency graph (`EPS`, `THERMAL`, `ADCS`, `OBC`, `SENSORS`), time-window alert correlation, deterministic rule-based hybrid causal hypothesis engine, persistent `correlations` storage, live graph/correlation Socket.IO events, and interactive `/fault-graph` Mission Control view.
+- **Phase 6 (Current):** Evidence-linked RAG runbook knowledge base (`ATT-RB-001`, `THM-RB-001`, `BAT-RB-001`), deterministic Markdown chunking, FastEmbed dense embeddings (`BAAI/bge-small-en-v1.5`), persistent FAISS similarity retrieval, grounded AI Copilot service with citation traceability and safety guardrails, `/api/v1/copilot/*` REST APIs, and interactive `/copilot` Mission Control page.
 
 ## Component Flow
 
 ```text
 +-------------------------------------------------------+
 |          React + Vite Mission Control UI              |
+|  - Evidence-Linked AI Copilot (/copilot)              |
 |  - Interactive Fault Graph + Hypothesis Inspector     |
 |  - Live Alerts Queue + Evidence & Ack/Resolve         |
 |  - Sensor Integrity Panel (System Diagnostics)        |
@@ -31,15 +33,18 @@ SAT-TRIAGE is a full-stack web platform for satellite telemetry anomaly triage, 
 |      3. AlertService (Deduplicate & Persist)          |
 |      4. CorrelationService (Time-Window Causal Rules) |
 |      5. Socket.IO Broadcast (alert:*, fault_graph:*)  |
+|  - RAG & AI Copilot (/api/v1/copilot/*):              |
+|      1. RunbookIngestion (manifest + MD chunking)     |
+|      2. RAGVectorStore (FastEmbed + FAISS IndexFlatIP)|
+|      3. CopilotService (Verified Telemetry + LLM/Guard|
 +---------------------------+---------------------------+
-                            | Scoped Sessions (asyncio.to_thread)
+                            | Scoped Sessions / Disk Persistence
                             v
 +-------------------------------------------------------+
-|              PostgreSQL 16 (Docker)                   |
-|  - users                                              |
-|  - telemetry_readings                                 |
-|  - alerts (dedup index + JSON evidence)               |
-|  - correlations (hypotheses, evidence, lifecycle)     |
+|       PostgreSQL 16 (Docker) & Local Data Store       |
+|  - users, telemetry_readings, alerts, correlations    |
+|  - backend/data/runbooks/ (3 approved MD + manifest)  |
+|  - backend/data/faiss/ (runbooks.index, chunks.json)  |
 +-------------------------------------------------------+
 ```
 
@@ -84,3 +89,19 @@ SAT-TRIAGE is a full-stack web platform for satellite telemetry anomaly triage, 
 4. **Correlation Persistence & Lifecycle (`correlations` table):**
    - Persists each active group (`correlation_id`, `satellite_id`, `rule_code`, `suspected_subsystem`, `hypothesis`, `grouping_reason`, `related_alert_ids`, `supporting_evidence`, `contradicting_evidence`, `confidence_score`, `confidence_explanation`, `status`, `window_start`, `window_end`, timestamps).
    - Operator actions (`ACTIVE` → `ACKNOWLEDGED` or `DISMISSED`) persist in PostgreSQL and broadcast updates over Socket.IO (`correlation:new`, `correlation:updated`, `fault_graph:update`).
+
+## Evidence-Linked RAG & AI Copilot (Phase 6)
+
+1. **Manifest-Validated Runbook Ingestion (`runbook_ingestion.py`):**
+   - Loads `backend/data/runbooks/manifest.json` and validates `ATT-RB-001` (`attitude_runbook.md`), `THM-RB-001` (`temperature_runbook.md`), and `BAT-RB-001` (`battery_runbook.md`), checking runbook IDs, versions, subsystem ownership, and anomaly IDs (`ATT-001`..`ATT-004`, `THM-001`..`THM-004`, `BAT-001`..`BAT-004`).
+   - Performs deterministic Markdown-aware section chunking (`H1`/`H2`/`H3`), preserves headings and tables, avoids duplicates via SHA-256 `content_hash`, and attaches `chunk_id`, `runbook_id`, `document_name`, `version`, `subsystem`, `anomaly_ids`, and `section_heading` metadata to every chunk (`87` total chunks across `3` runbooks).
+2. **Embeddings & Persistent FAISS Index (`rag_store.py`):**
+   - Computes 384-dimensional L2-normalized dense embeddings via `FastEmbed` (`BAAI/bge-small-en-v1.5`, quantized ONNX cached under `backend/data/models/`) and indexes them with `faiss.IndexFlatIP` (exact cosine similarity).
+   - Persists `runbooks.index`, `chunks.json`, and `index_meta.json` under `backend/data/faiss/` via atomic replacement and validates file integrity, vector counts, dimensions, and model match on load (reporting `READY`, `MISSING`, or `CORRUPTED` transparently without silent fallbacks).
+3. **Context-Aware Semantic Retrieval:**
+   - Supports `subsystem` filtering (including alias mapping `EPS`/`THERMAL`/`ADCS`), `anomaly_id` filtering, and configurable `top_k`, while ranking with `RAG_MIN_SIMILARITY = 0.56` sufficiency gating.
+   - Separates electrical-power battery temperature context (`BAT-RB-001`) from broader spacecraft thermal control (`THM-RB-001`) and preserves ADCS angle-wrapping rules (`+179°` to `-179°` vs `358°` rotation).
+4. **Grounded AI Copilot & Safety Boundaries (`copilot_service.py`):**
+   - Supplies only verified telemetry readings (`battery_voltage`, `temperature`, `roll`, `pitch`, `yaw`), persisted PostgreSQL alerts/correlations, and retrieved runbook chunks to the optional configured LLM (`GEMINI_API_KEY` with default `gemini-3.1-flash-lite`, `OPENAI_API_KEY`, or `LLM_API_KEY`).
+   - If no LLM key is configured, vector retrieval still executes and returns `generation_status = "LLM_UNAVAILABLE"` with inspectable chunks rather than fabricated AI answers.
+   - Post-generation guardrails strip ungrounded citations not matching retrieved `chunk_id` / `(runbook_id, section_heading)`, reject fabricated unsupported telemetry channels (`battery_current`, `battery_soc`, `angular_velocity`, `reaction_wheel_speed`, `electronics_temperature`), block autonomous spacecraft command language, enforce correlation != causation, and handle malformed LLM JSON safely (`MALFORMED_LLM_RESPONSE`).

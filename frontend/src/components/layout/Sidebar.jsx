@@ -22,11 +22,11 @@ const PRIMARY_NAV = [
   { to: "/telemetry", label: "Telemetry", icon: Radio },
   { to: "/alerts", label: "Alerts", icon: AlertTriangle },
   { to: "/fault-graph", label: "Fault Graph", icon: GitBranch },
+  { to: "/copilot", label: "AI Copilot", icon: Bot },
   { to: "/incidents", label: "Incidents", icon: FileCheck2 },
 ];
 
 const UPCOMING_NAV = [
-  { label: "AI Copilot", icon: Bot },
   { label: "Predictive Simulator", icon: Sliders },
   { label: "Audit History", icon: History },
 ];

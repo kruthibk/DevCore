@@ -3,6 +3,7 @@ import MainLayout from "./components/layout/MainLayout";
 import { useSystemHealth } from "./hooks/useSystemHealth";
 import { useTelemetryStream } from "./hooks/useTelemetryStream";
 import Alerts from "./pages/Alerts";
+import AICopilot from "./pages/AICopilot";
 import Diagnostics from "./pages/Diagnostics";
 import FaultGraph from "./pages/FaultGraph";
 import Incidents from "./pages/Incidents";
@@ -25,6 +26,10 @@ const PAGE_META = {
   "/fault-graph": {
     title: "Hybrid Causal Fault Graph",
     subtitle: "Subsystem Dependencies, Alert Correlation & Root-Cause Hypotheses",
+  },
+  "/copilot": {
+    title: "Evidence-Linked AI Copilot",
+    subtitle: "Runbook RAG Retrieval & Grounded Investigative Triage Guidance",
   },
   "/incidents": {
     title: "Incident Management",
@@ -49,6 +54,7 @@ export default function App() {
         <Route path="/telemetry" element={<Telemetry health={health} stream={stream} />} />
         <Route path="/alerts" element={<Alerts stream={stream} />} />
         <Route path="/fault-graph" element={<FaultGraph stream={stream} />} />
+        <Route path="/copilot" element={<AICopilot stream={stream} />} />
         <Route path="/incidents" element={<Incidents />} />
         <Route path="/diagnostics" element={<Diagnostics health={health} stream={stream} />} />
         <Route path="*" element={<Navigate to="/" replace />} />

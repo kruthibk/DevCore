@@ -1,0 +1,112 @@
+{
+  "manifest_version": "1.0",
+  "knowledge_base": "SAT-TRIAGE Runbook Knowledge Base",
+  "indexing_status": "prepared_not_indexed",
+  "supported_simulator_channels": [
+    "battery_voltage",
+    "temperature",
+    "roll",
+    "pitch",
+    "yaw"
+  ],
+  "unsupported_candidate_fields_policy": "Do not fabricate battery current, SOC, angular velocity, reaction wheel speed, or additional temperature channels not present in the simulator.",
+  "subsystem_ownership": {
+    "battery_power": "BAT-RB-001 owns battery voltage and battery temperature only when investigated in an electrical-power context (e.g., alongside battery_voltage changes).",
+    "temperature_thermal": "THM-RB-001 owns broader spacecraft thermal behaviour across components and thermal-control equipment.",
+    "attitude_adcs": "ATT-RB-001 owns spacecraft attitude and orientation telemetry (roll, pitch, yaw)."
+  },
+  "safety_rules": [
+    "No autonomous spacecraft commands or control execution.",
+    "No invented universal engineering limits; mission limits must come from configured detector bounds or approved documentation.",
+    "No unsupported root-cause claims; present possible causes only.",
+    "Correlation does not prove causation.",
+    "Runbook recommendations must remain investigative and grounded in retrieved evidence."
+  ],
+  "runbooks": [
+    {
+      "runbook_id": "ATT-RB-001",
+      "filename": "attitude_runbook.md",
+      "version": "1.0",
+      "subsystem": "attitude_adcs",
+      "subsystem_display_name": "Attitude Determination and Control System (ADCS)",
+      "title": "Attitude and Orientation Subsystem Troubleshooting Runbook",
+      "document_type": "troubleshooting_runbook",
+      "anomaly_ids": [
+        "ATT-001",
+        "ATT-002",
+        "ATT-003",
+        "ATT-004"
+      ],
+      "keywords": [
+        "attitude",
+        "orientation",
+        "ADCS",
+        "roll",
+        "pitch",
+        "yaw",
+        "angular velocity",
+        "reaction wheel"
+      ],
+      "supported_simulator_channels": [
+        "roll",
+        "pitch",
+        "yaw"
+      ],
+      "ownership_scope": "Owns attitude and orientation anomalies (roll, pitch, yaw)."
+    },
+    {
+      "runbook_id": "THM-RB-001",
+      "filename": "temperature_runbook.md",
+      "version": "1.0",
+      "subsystem": "temperature_thermal",
+      "subsystem_display_name": "Thermal Control",
+      "title": "Temperature and Thermal Subsystem Troubleshooting Runbook",
+      "document_type": "troubleshooting_runbook",
+      "anomaly_ids": [
+        "THM-001",
+        "THM-002",
+        "THM-003",
+        "THM-004"
+      ],
+      "keywords": [
+        "temperature",
+        "thermal",
+        "heating",
+        "cooling",
+        "sensor",
+        "thermal control"
+      ],
+      "supported_simulator_channels": [
+        "temperature"
+      ],
+      "ownership_scope": "Owns broader spacecraft thermal behaviour and thermal-control component temperature checks."
+    },
+    {
+      "runbook_id": "BAT-RB-001",
+      "filename": "battery_runbook.md",
+      "version": "1.0",
+      "subsystem": "battery_power",
+      "subsystem_display_name": "Battery and Electrical Power",
+      "title": "Battery and Power Subsystem Troubleshooting Runbook",
+      "document_type": "troubleshooting_runbook",
+      "anomaly_ids": [
+        "BAT-001",
+        "BAT-002",
+        "BAT-003",
+        "BAT-004"
+      ],
+      "keywords": [
+        "battery",
+        "voltage",
+        "current",
+        "SOC",
+        "power",
+        "temperature"
+      ],
+      "supported_simulator_channels": [
+        "battery_voltage"
+      ],
+      "ownership_scope": "Owns battery voltage and battery temperature only when investigated in an electrical-power context."
+    }
+  ]
+}

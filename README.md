@@ -19,7 +19,8 @@ Satellite ground operations teams monitor thousands of telemetry channels across
 - **Phase 2:** Ground-station Mission Control UI (`Overview`, `Telemetry`, `Alerts`, `Incidents`, `System Diagnostics`) with responsive layout and explicit empty states.
 - **Phase 3:** Backend NumPy synthetic telemetry generator (`SAT-01`), controllable fault-injection scenarios, `python-socketio` real-time streaming to Recharts dashboards, and bounded batch PostgreSQL persistence (`telemetry_readings`). All generated readings are explicitly marked as **SYNTHETIC SIMULATION DATA**.
 - **Phase 4:** Statistical anomaly detection (rolling baseline + z-score, rate-of-change, engineering limits using NumPy, Pandas, SciPy), independent cross-signal sensor integrity verification (`MISSING`, `FROZEN`, `INVALID`, `STALE`), deduplicated persistent alerts in PostgreSQL (`alerts`), and live Socket.IO alert/integrity streaming.
-- **Phase 5 (Current):** Configurable satellite subsystem dependency graph (`EPS`, `THERMAL`, `ADCS`, `OBC`, `SENSORS`), time-window alert correlation (`120s` default window), rule-based hybrid causal hypothesis engine with supporting/contradicting evidence and illustrative heuristic confidence, persistent `correlations` storage, and interactive `/fault-graph` operator view.
+- **Phase 5:** Configurable satellite subsystem dependency graph (`EPS`, `THERMAL`, `ADCS`, `OBC`, `SENSORS`), time-window alert correlation (`120s` default window), rule-based hybrid causal hypothesis engine with supporting/contradicting evidence and illustrative heuristic confidence, persistent `correlations` storage, and interactive `/fault-graph` operator view.
+- **Phase 6 (Current):** Evidence-linked RAG + AI Copilot backed by the three approved troubleshooting runbooks (`ATT-RB-001`, `THM-RB-001`, `BAT-RB-001`), deterministic Markdown chunking, FastEmbed (`BAAI/bge-small-en-v1.5`, 384d) embeddings, persistent FAISS `IndexFlatIP` retrieval (`backend/data/faiss/`), strict citation/hallucination/command guardrails, `/api/v1/copilot/*` endpoints, and interactive `/copilot` Mission Control page.
 
 ---
 
@@ -96,6 +97,9 @@ Thresholds are centralized in [detection_config.py](backend/app/core/detection_c
 | `GET` | `/api/v1/fault-graph/correlations/{correlation_id}` | Returns full correlation details, linked alerts, supporting/contradicting evidence, and confidence explanation. |
 | `POST` | `/api/v1/fault-graph/correlations/{correlation_id}/acknowledge` | Transitions a correlation hypothesis to `ACKNOWLEDGED` and emits Socket.IO updates. |
 | `POST` | `/api/v1/fault-graph/correlations/{correlation_id}/dismiss` | Transitions a correlation hypothesis to `DISMISSED` and emits Socket.IO updates. |
+| `GET` | `/api/v1/copilot/status` | Returns FAISS index health, document/chunk counts, embedding model, and LLM availability. |
+| `POST` | `/api/v1/copilot/ask` | Runs semantic runbook retrieval and grounded investigative Copilot generation (`generation_status`, `retrieved_evidence`, `answer`). |
+| `POST` | `/api/v1/copilot/reindex` | Deterministically re-ingests `manifest.json` runbooks, computes embeddings, and rebuilds the persisted FAISS index. |
 
 ---
 
@@ -125,6 +129,30 @@ Thresholds are centralized in [detection_config.py](backend/app/core/detection_c
 
 ---
 
+## Runbook Knowledge Base & RAG Indexing (Phase 6)
+
+Troubleshooting runbooks are stored under `backend/data/runbooks/` alongside [manifest.json](backend/data/runbooks/manifest.json), indexed into a persistent FAISS vector store under `backend/data/faiss/` (`runbooks.index`, `chunks.json`, `index_meta.json`) using quantized `FastEmbed` (`BAAI/bge-small-en-v1.5`, 384-dim cosine similarity, cached in `backend/data/models/`):
+
+| Runbook ID | Subsystem | Anomaly IDs | File |
+| :--- | :--- | :--- | :--- |
+| `ATT-RB-001` | `attitude_adcs` | `ATT-001` – `ATT-004` | [attitude_runbook.md](backend/data/runbooks/attitude_runbook.md) |
+| `THM-RB-001` | `temperature_thermal` | `THM-001` – `THM-004` | [temperature_runbook.md](backend/data/runbooks/temperature_runbook.md) |
+| `BAT-RB-001` | `battery_power` | `BAT-001` – `BAT-004` | [battery_runbook.md](backend/data/runbooks/battery_runbook.md) |
+
+### Indexing Procedure & Environment Variables
+- Trigger `POST /api/v1/copilot/reindex` (or click **Rebuild FAISS Index** on `/copilot`) to validate `manifest.json`, run deterministic Markdown section chunking (`87` chunks), compute dense vectors, and persist/verify the FAISS index.
+- Optional RAG & LLM variables in `.env` (documented in [.env.example](.env.example); never commit real API keys):
+  - `EMBEDDING_MODEL_NAME=BAAI/bge-small-en-v1.5`, `RUNBOOKS_DIR=backend/data/runbooks`, `FAISS_INDEX_DIR=backend/data/faiss`, `EMBEDDING_CACHE_DIR=backend/data/models`, `RAG_TOP_K=5`, `RAG_MIN_SIMILARITY=0.56`
+  - `LLM_PROVIDER=auto` (`gemini` defaulting to `gemini-3.1-flash-lite`, `openai` / `openai_compatible` defaulting to `gpt-4o-mini`), `LLM_MODEL`, `LLM_BASE_URL`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `LLM_API_KEY`, `LLM_TIMEOUT_SECONDS=25.0`
+- If no LLM key is configured, vector retrieval still executes and returns inspectable citations with `generation_status: "LLM_UNAVAILABLE"` (no fabricated AI answers).
+
+**Scope, Limitations & Safety Boundaries:**
+- **Subsystem Ownership:** `BAT-RB-001` owns battery voltage and battery temperature in an electrical-power context; `THM-RB-001` owns broader spacecraft thermal behaviour; `ATT-RB-001` owns `roll`, `pitch`, and `yaw` (preserving `+179°` to `-179°` angle-wrapping semantics).
+- **Telemetry Constraints:** The simulator supports only `battery_voltage`, `temperature`, `roll`, `pitch`, and `yaw`; candidate fields such as `battery_current`, `battery_soc`, `angular_velocity`, `reaction_wheel_speed`, or extra temperature sensors must never be fabricated.
+- **Safety:** Statistical anomaly detectors remain authoritative; guidance remains strictly investigative (no autonomous spacecraft commands, no invented universal limits, no unsupported root-cause claims, ungrounded citations stripped, and correlation never proves causation).
+
+---
+
 ## Testing Instructions
 
 ```bash
@@ -150,6 +178,8 @@ npm run build
 | `pandas` | 3.1.1 | BSD-3-Clause |
 | `scipy` | 1.18.1 | BSD-3-Clause |
 | `python-socketio` | 5.18.1 | MIT |
+| `faiss-cpu` | 1.16.0 | MIT |
+| `fastembed` | 0.9.1 | Apache-2.0 |
 | `sqlalchemy` | 2.1.9 | MIT |
 | `psycopg` | 3.3.9 | LGPL-3.0-only |
 | `pydantic` | 2.14.4 | MIT |
